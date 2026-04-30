@@ -1,4 +1,7 @@
-use crate::core::error::{Error, Result};
+use crate::core::{
+    error::{Error, Result},
+    manifest::{init_current_project, InitProjectReport},
+};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Command {
@@ -36,8 +39,26 @@ impl Command {
 }
 
 pub fn run(command: Command) -> Result<()> {
-    Err(Error::not_implemented(format!(
-        "command `{}` is not implemented yet",
-        command.name()
-    )))
+    match command {
+        Command::Init => run_init(),
+        other => Err(Error::not_implemented(format!(
+            "command `{}` is not implemented yet",
+            other.name()
+        ))),
+    }
+}
+
+fn run_init() -> Result<()> {
+    let report = init_current_project()?;
+    print_init_report(&report);
+    Ok(())
+}
+
+fn print_init_report(report: &InitProjectReport) {
+    println!(
+        "Initialized Agent Linker project at {}",
+        report.project_root.display()
+    );
+    println!("Manifest: {}", report.manifest_path.display());
+    println!("Managed links: {}", report.link_outcomes.len());
 }

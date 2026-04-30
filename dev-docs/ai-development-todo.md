@@ -57,13 +57,19 @@
 
 目标：完成 `aglink init` 的真实源结构、Claude 兼容链接和 `.agents/links.toml` 管理。
 
-- [ ] 实现 `.agents/links.toml` schema、读写、合法性校验和损坏 manifest 失败语义。
-- [ ] 实现项目路径创建规则：`AGENTS.md`、`.agents/`、`.agents/skills/`。
-- [ ] 实现 `.gitignore` managed block，保证用户内容不被覆盖。
-- [ ] 实现内置 Claude mapping：`AGENTS.md -> CLAUDE.md`、`.agents/skills/ -> .claude/skills/`。
-- [ ] 实现 `aglink init` command，command 层不得直接读写 manifest 或调用平台 symlink API。
-- [ ] 用临时目录集成测试验证重复 `init` 幂等、不修改已有真实 `AGENTS.md` 内容。
-- [ ] 用冲突测试验证真实 `CLAUDE.md`、真实 `.claude/skills/`、错误 symlink 均按设计失败。
+- [x] 实现 `.agents/links.toml` schema、读写、合法性校验和损坏 manifest 失败语义。
+- [x] 实现项目路径创建规则：`AGENTS.md`、`.agents/`、`.agents/skills/`。
+- [x] 实现 `.gitignore` managed block，保证用户内容不被覆盖。
+- [x] 实现内置 Claude mapping：`AGENTS.md -> CLAUDE.md`、`.agents/skills/ -> .claude/skills/`。
+- [x] 实现 `aglink init` command，command 层不得直接读写 manifest 或调用平台 symlink API。
+- [x] 用临时目录集成测试验证重复 `init` 幂等、不修改已有真实 `AGENTS.md` 内容。
+- [x] 用冲突测试验证真实 `CLAUDE.md`、真实 `.claude/skills/`、错误 symlink 均按设计失败。
+
+阶段 2 验证备注（2026-04-30）：
+
+- 已运行：`cargo fmt --check`、`cargo check --locked`、`cargo test --locked`、`cargo run --locked -- --help`。
+- `init` 的链接行为使用临时目录加 mock symlink provider 覆盖成功、幂等和冲突路径；真实 Windows Broker 创建路径仍留待阶段 8 平台专项验证。
+- 用户随后在本仓库实际运行 `aglink.exe init`，本会话观察到 `CLAUDE.md` 与 `.claude/skills` 为真实 symlink，`.agents/links.toml` 记录 `provider_backend = "windows-broker"`；阶段 8 仍保留更完整的平台专项验证。
 
 验收：`aglink init` 在临时项目内能创建真实源、兼容链接、manifest 和 `.gitignore` managed block；重复执行结果稳定。
 

@@ -4,3 +4,9 @@
 *.exe
 .codex
 docs/prompt-temp.md
+
+# BEGIN aglink managed
+.claude/
+.agents/skills/
+.agents/links.toml
+# END aglink managed

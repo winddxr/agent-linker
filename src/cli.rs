@@ -57,7 +57,16 @@ fn parse_args(mut args: impl Iterator<Item = String>) -> Result<CliRequest> {
 
     match command.as_str() {
         "-h" | "--help" => Ok(CliRequest::Help),
-        "init" => Ok(CliRequest::Command(Command::Init)),
+        "init" => {
+            let remaining: Vec<String> = args.collect();
+            if remaining.is_empty() {
+                Ok(CliRequest::Command(Command::Init))
+            } else {
+                Err(Error::invalid_arguments(
+                    "command `init` does not accept arguments",
+                ))
+            }
+        }
         "config" => Ok(CliRequest::Command(Command::Config(args.collect()))),
         "db" => Ok(CliRequest::Command(Command::Db(args.collect()))),
         "framework" => Ok(CliRequest::Command(Command::Framework(args.collect()))),
