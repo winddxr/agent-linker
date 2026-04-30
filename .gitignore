@@ -1,0 +1,6 @@
+/target/
+*.pdb
+*.ilk
+*.exe
+.codex
+docs/prompt-temp.md
