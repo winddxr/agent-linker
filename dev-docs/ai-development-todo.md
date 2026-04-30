@@ -14,11 +14,17 @@
 
 目标：建立 Rust 单 crate MVP 的最小可编译骨架，并明确后续 AI 会话使用的真实命令。
 
-- [ ] 检查仓库配置，确认是否已有 `Cargo.toml`、crate 名、bin 名和可用脚本；不 invent build/test 命令。
-- [ ] 若缺少 Rust 项目骨架，创建单 crate CLI 项目，bin 名为 `aglink`。
-- [ ] 建立模块边界：`cli -> commands -> core`，并创建 `core::{error, paths, symlink, manifest, db, registry, framework, linkable}` 的占位入口。
-- [ ] 添加最小 CLI 入口和 `aglink --help` 可运行验证。
-- [ ] 记录实际验证命令到本阶段任务备注，供后续会话复用。
+- [x] 检查仓库配置，确认是否已有 `Cargo.toml`、crate 名、bin 名和可用脚本；不 invent build/test 命令。（阶段 0 开始时未发现 `Cargo.toml` 或脚本；已创建 crate `agent_linker`，bin `aglink`。）
+- [x] 若缺少 Rust 项目骨架，创建单 crate CLI 项目，bin 名为 `aglink`。
+- [x] 建立模块边界：`cli -> commands -> core`，并创建 `core::{error, paths, symlink, manifest, db, registry, framework, linkable}` 的占位入口。
+- [x] 添加最小 CLI 入口和 `aglink --help` 可运行验证。（实现已添加；本会话未取得实际运行结果，见验证备注。）
+- [x] 记录实际验证命令到本阶段任务备注，供后续会话复用。
+
+阶段 0 验证备注（2026-04-30）：
+
+- 发现的基础验证命令：`cargo check`、`cargo test`、`cargo run -- --help`。
+- 本会话普通沙箱运行 `cargo check`、`cargo test`、`cargo run -- --help` 均失败，错误为 `windows sandbox: setup refresh failed with status exit code: 1`。
+- 本会话按规则尝试提权运行 Cargo 验证命令，但自动权限审核超时，未取得实际 Cargo 输出；后续会话应在可执行 shell 中复跑上述命令后再确认阶段 0 验收。
 
 验收：`aglink --help` 能运行；项目能通过已发现的基础构建或检查命令。
 
@@ -151,4 +157,3 @@
 Read AGENTS.md, then open dev-docs/ai-development-todo.md.
 Pick the first unchecked task in the current phase, read only the conditional module docs named for that phase, implement it, run discovered tests, and update the checkbox only after verification.
 ```
-
