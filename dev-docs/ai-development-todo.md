@@ -34,12 +34,20 @@
 
 目标：先把所有链接安全语义做成可测试 core 能力。
 
-- [ ] 定义 `LinkKind`、`LinkStatus`、Provider trait 和结构化 symlink 错误分类。
-- [ ] 实现 link status 检查，覆盖 missing、正确链接、错误链接、断链、真实文件、真实目录和不支持类型。
-- [ ] 实现 create/remove/read 的 mock provider，并用单元测试锁定幂等与冲突语义。
-- [ ] 实现 Unix 标准库 provider，平台条件编译限制在 symlink 模块内。
-- [ ] 实现 Windows provider 选择策略：默认 Broker，标准库 symlink 只作为显式 fallback。
-- [ ] 用测试证明 `--force` 语义只可替换错误 symlink，不可删除真实文件或真实目录。
+- [x] 定义 `LinkKind`、`LinkStatus`、Provider trait 和结构化 symlink 错误分类。
+- [x] 实现 link status 检查，覆盖 missing、正确链接、错误链接、断链、真实文件、真实目录和不支持类型。
+- [x] 实现 create/remove/read 的 mock provider，并用单元测试锁定幂等与冲突语义。
+- [x] 实现 Unix 标准库 provider，平台条件编译限制在 symlink 模块内。
+- [x] 实现 Windows provider 选择策略：默认 Broker，标准库 symlink 只作为显式 fallback。
+- [x] 集成 `win-symlinks-client` broker-only 能力，实现 Windows Broker provider 创建真实 symlink。
+- [x] 用测试证明 `--force` 语义只可替换错误 symlink，不可删除真实文件或真实目录。
+阶段 1 验证备注（2026-04-30）：
+
+- 已运行：`cargo fmt --check`、`cargo check`、`cargo test`、`cargo run -- --help`。
+- 本会话追加验证：`git ls-remote https://github.com/winddxr/win-symlinks HEAD`、`cargo metadata --format-version 1`、`cargo check --locked`、`cargo test --locked`、`cargo run --locked -- --help`。
+- `win-symlinks-client` 使用公开 git 依赖，`Cargo.lock` 锁定到 `https://github.com/winddxr/win-symlinks#7d5c3317764b8456ce4af140e0cd0aaf375cee1d`。
+- 本环境普通沙箱运行默认 Cargo cache 仍会因 `F:\Runtime\Rust\.cargo\git\db` 写入被拒绝而失败；同样命令使用提权后，默认 Cargo cache 可正常解析、下载、构建和测试公开 git 依赖。
+- 当前 Windows 环境验证了默认 provider 选择为 Windows Broker，并验证了 Broker 错误码映射；真实 Broker 服务端创建路径仍留待阶段 8 平台专项验证。Unix 标准库 provider 代码通过条件编译隔离，并带 `#[cfg(unix)]` 平台专项测试，未在本 Windows 会话实际执行。
 
 验收：symlink core 单元测试通过；mock provider 能覆盖命令层后续测试需要的成功、跳过和冲突场景。
 

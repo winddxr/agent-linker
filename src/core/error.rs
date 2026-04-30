@@ -1,11 +1,14 @@
 use std::{error, fmt, io};
 
+use crate::core::symlink::SymlinkError;
+
 pub type Result<T> = std::result::Result<T, Error>;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Error {
     InvalidArguments(String),
     NotImplemented(String),
+    Symlink(SymlinkError),
     Io(String),
 }
 
@@ -24,6 +27,7 @@ impl fmt::Display for Error {
         match self {
             Error::InvalidArguments(message) => write!(formatter, "{message}"),
             Error::NotImplemented(message) => write!(formatter, "{message}"),
+            Error::Symlink(error) => write!(formatter, "{error}"),
             Error::Io(message) => write!(formatter, "{message}"),
         }
     }
@@ -34,5 +38,11 @@ impl error::Error for Error {}
 impl From<io::Error> for Error {
     fn from(error: io::Error) -> Self {
         Self::Io(error.to_string())
+    }
+}
+
+impl From<SymlinkError> for Error {
+    fn from(error: SymlinkError) -> Self {
+        Self::Symlink(error)
     }
 }

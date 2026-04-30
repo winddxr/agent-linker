@@ -69,7 +69,9 @@ fn parse_args(mut args: impl Iterator<Item = String>) -> Result<CliRequest> {
         "status" => Ok(CliRequest::Command(Command::Status(args.collect()))),
         "clean" => Ok(CliRequest::Command(Command::Clean(args.collect()))),
         "doctor" => Ok(CliRequest::Command(Command::Doctor(args.collect()))),
-        other => Err(Error::invalid_arguments(format!("unknown command `{other}`"))),
+        other => Err(Error::invalid_arguments(format!(
+            "unknown command `{other}`"
+        ))),
     }
 }
 

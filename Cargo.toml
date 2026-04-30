@@ -5,6 +5,10 @@ edition = "2021"
 license = "MIT OR Apache-2.0"
 publish = false
 
+[target.'cfg(windows)'.dependencies]
+win-symlinks-client = { git = "https://github.com/winddxr/win-symlinks", package = "win-symlinks-client" }
+windows = { version = "0.62", features = ["Win32_Security"] }
+
 [[bin]]
 name = "aglink"
 path = "src/main.rs"

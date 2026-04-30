@@ -36,6 +36,9 @@ Correctness and safety of real files, symlink targets, and project link state ar
 Use this section to record commands that should be run with escalation immediately in this workspace, without first attempting a non-escalated run.
 - `git add` — direct escalation required; sandboxed execution consistently fails with Git index lock or permission errors.
 - `git commit` — direct escalation required; sandboxed execution consistently fails with Git index lock or permission errors.
+- Cargo commands that resolve, fetch, build, test, or run with the default Cargo cache should use direct escalation in this workspace. This includes `cargo metadata --format-version 1`, `cargo check --locked`, `cargo test --locked`, and `cargo run --locked -- --help`; sandboxed execution fails writing under `F:\Runtime\Rust\.cargo\git\db`.
+- Use default `CARGO_HOME` with escalation for normal Rust verification. Use workspace-local `CARGO_HOME=.tmp-cargo-home` only for isolated cache diagnostics, and remove `.tmp-cargo-home` before finishing.
+- `git ls-remote https://github.com/winddxr/win-symlinks HEAD` — direct escalation required when diagnosing the public `win-symlinks-client` git dependency; sandboxed network access to GitHub may fail.
 
 ## Verification
 
