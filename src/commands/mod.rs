@@ -5,10 +5,12 @@ use crate::core::{
     linkable::{LinkableItem, LinkableItemType},
     manifest::{init_current_project, InitProjectReport},
     project_links::{
-        link_current_project, status_current_project, unlink_current_project, LinkItemReport,
-        LinkItemRequest, StatusReport, UnlinkReport,
+        clean_current_project, doctor_current_project, link_current_project,
+        link_group_current_project, status_current_project, unlink_current_project,
+        unlink_group_current_project, CleanMode, CleanReport, DoctorReport, LinkGroupReport,
+        LinkItemReport, LinkItemRequest, StatusReport, UnlinkReport,
     },
-    registry::{self, AddLinkableItem},
+    registry::{self, AddLinkableItem, Group},
     symlink::{CreateSymlinkOutcome, LinkStatus, RemoveSymlinkOutcome},
 };
 
@@ -30,43 +32,34 @@ pub enum Command {
     Doctor(Vec<String>),
 }
 
-impl Command {
-    fn name(&self) -> &'static str {
-        match self {
-            Command::Init => "init",
-            Command::Config(_) => "config",
-            Command::Db(_) => "db",
-            Command::Framework(_) => "framework",
-            Command::Skill(_) => "skill",
-            Command::Resource(_) => "resource",
-            Command::Group(_) => "group",
-            Command::Link(_) => "link",
-            Command::Unlink(_) => "unlink",
-            Command::Status(_) => "status",
-            Command::Clean(_) => "clean",
-            Command::Doctor(_) => "doctor",
-        }
-    }
-}
-
 pub fn run(command: Command) -> Result<()> {
     match command {
         Command::Init => run_init(),
+        Command::Config(_) => Err(Error::not_implemented(
+            "command `config` is not implemented yet",
+        )),
         Command::Db(args) => run_db(args),
         Command::Framework(args) => run_framework(args),
         Command::Skill(args) => run_linkable(args, LinkableItemType::Skill),
         Command::Resource(args) => run_linkable(args, LinkableItemType::Resource),
+        Command::Group(args) => run_group(args),
         Command::Link(args) => run_link(args),
         Command::Unlink(args) => run_unlink(args),
         Command::Status(args) => run_status(args),
-        other => Err(Error::not_implemented(format!(
-            "command `{}` is not implemented yet",
-            other.name()
-        ))),
+        Command::Clean(args) => run_clean(args),
+        Command::Doctor(args) => run_doctor(args),
     }
 }
 
 fn run_link(args: Vec<String>) -> Result<()> {
+    if let [flag, group] = args.as_slice() {
+        if flag == "--group" {
+            let report = link_group_current_project(group)?;
+            print_link_group_report(&report);
+            return Ok(());
+        }
+    }
+
     let request = parse_link_request(&args)?;
     let report = link_current_project(request)?;
     print_link_report(&report);
@@ -74,7 +67,8 @@ fn run_link(args: Vec<String>) -> Result<()> {
 }
 
 fn parse_link_request(args: &[String]) -> Result<LinkItemRequest> {
-    let usage = "usage: aglink link <name> [--as <link-name>] [--target-dir <dir>]";
+    let usage =
+        "usage: aglink link <name> [--as <link-name>] [--target-dir <dir>] | aglink link --group <group>";
     let Some(identifier) = args.first() else {
         return Err(Error::invalid_arguments(usage));
     };
@@ -135,7 +129,37 @@ fn print_link_report(report: &LinkItemReport) {
     println!("Manifest: {}", report.manifest_path.display());
 }
 
+fn print_link_group_report(report: &LinkGroupReport) {
+    println!(
+        "Linked group `{}`: {} items",
+        report.group_name,
+        report.reports.len()
+    );
+    for item in &report.reports {
+        let action = match item.outcome {
+            CreateSymlinkOutcome::Created => "created",
+            CreateSymlinkOutcome::AlreadyCorrect => "already-linked",
+            CreateSymlinkOutcome::ReplacedWrongSymlink => "updated",
+        };
+        println!(
+            "{}\t{}\t{}",
+            action,
+            item.item_name,
+            item.link_path.display()
+        );
+    }
+    println!("Manifest: {}", report.manifest_path.display());
+}
+
 fn run_unlink(args: Vec<String>) -> Result<()> {
+    if let [flag, group] = args.as_slice() {
+        if flag == "--group" {
+            let report = unlink_group_current_project(group)?;
+            print_unlink_report(&report);
+            return Ok(());
+        }
+    }
+
     let identifier = parse_unlink_request(&args)?;
     let report = unlink_current_project(identifier)?;
     print_unlink_report(&report);
@@ -147,10 +171,10 @@ fn parse_unlink_request(args: &[String]) -> Result<Option<String>> {
         [flag] if flag == "--all" => Ok(None),
         [identifier] if !identifier.starts_with("--") => Ok(Some(identifier.clone())),
         [] => Err(Error::invalid_arguments(
-            "usage: aglink unlink <name>|--all",
+            "usage: aglink unlink <name>|--group <group>|--all",
         )),
         _ => Err(Error::invalid_arguments(
-            "usage: aglink unlink <name>|--all",
+            "usage: aglink unlink <name>|--group <group>|--all",
         )),
     }
 }
@@ -188,6 +212,85 @@ fn run_status(args: Vec<String>) -> Result<()> {
         print_status_report(&report);
     }
     Ok(())
+}
+
+fn run_clean(args: Vec<String>) -> Result<()> {
+    let mode = match args.as_slice() {
+        [] => CleanMode::Default,
+        [flag] if flag == "--broken" => CleanMode::Broken,
+        [flag] if flag == "--missing-source" => CleanMode::MissingSource,
+        _ => {
+            return Err(Error::invalid_arguments(
+                "usage: aglink clean [--broken|--missing-source]",
+            ));
+        }
+    };
+
+    let report = clean_current_project(mode)?;
+    print_clean_report(&report);
+    Ok(())
+}
+
+fn print_clean_report(report: &CleanReport) {
+    println!(
+        "Cleaned managed links: {} removed, {} stale records dropped",
+        report.removed.len(),
+        report.dropped_missing.len()
+    );
+    for entry in &report.removed {
+        let action = match entry.outcome {
+            RemoveSymlinkOutcome::Removed => "removed",
+            RemoveSymlinkOutcome::Missing => "missing",
+        };
+        println!(
+            "{}\t{}\t{}",
+            action,
+            entry.record.item_name,
+            entry.record.link_path.display()
+        );
+    }
+    for record in &report.dropped_missing {
+        println!(
+            "dropped\t{}\t{}",
+            record.item_name,
+            record.link_path.display()
+        );
+    }
+    println!("Manifest: {}", report.manifest_path.display());
+}
+
+fn run_doctor(args: Vec<String>) -> Result<()> {
+    let verbose = match args.as_slice() {
+        [] => false,
+        [flag] if flag == "--verbose" => true,
+        _ => return Err(Error::invalid_arguments("usage: aglink doctor [--verbose]")),
+    };
+
+    let report = doctor_current_project(verbose);
+    print_doctor_report(&report);
+    if report.ok {
+        Ok(())
+    } else {
+        Err(Error::project("doctor reported issues"))
+    }
+}
+
+fn print_doctor_report(report: &DoctorReport) {
+    println!(
+        "Doctor: {}",
+        if report.ok { "ok" } else { "needs attention" }
+    );
+    for check in &report.checks {
+        println!(
+            "{}\t{}\t{}",
+            if check.ok { "ok" } else { "fail" },
+            check.name,
+            check.summary
+        );
+        for detail in &check.details {
+            println!("  {detail}");
+        }
+    }
 }
 
 fn print_status_report(report: &StatusReport) {
@@ -289,6 +392,90 @@ fn print_init_report(report: &InitProjectReport) {
     );
     println!("Manifest: {}", report.manifest_path.display());
     println!("Managed links: {}", report.link_outcomes.len());
+}
+
+fn run_group(args: Vec<String>) -> Result<()> {
+    let resolution = db::resolve_database_path()?;
+
+    match args.as_slice() {
+        [subcommand, name] if subcommand == "create" => {
+            let group = registry::create_group(&resolution, name, None)?;
+            println!("Created group `{}`", group.name);
+            Ok(())
+        }
+        [subcommand] if subcommand == "list" => {
+            for group in registry::list_groups(&resolution)? {
+                println!("{}\t{} items", group.name, group.items.len());
+            }
+            Ok(())
+        }
+        [subcommand, name] if subcommand == "show" => {
+            let group = registry::show_group(&resolution, name)?;
+            print_group(&group);
+            Ok(())
+        }
+        [subcommand, old, new] if subcommand == "rename" => {
+            let group = registry::rename_group(&resolution, old, new)?;
+            println!("Renamed group to `{}`", group.name);
+            Ok(())
+        }
+        [subcommand, name] if subcommand == "delete" => {
+            let group = registry::delete_group(&resolution, name)?;
+            println!("Deleted group `{}`; sources were not modified", group.name);
+            Ok(())
+        }
+        [subcommand, group, items @ ..] if subcommand == "add" => {
+            let group = registry::add_group_items(&resolution, group, items)?;
+            println!(
+                "Updated group `{}`: {} items",
+                group.name,
+                group.items.len()
+            );
+            Ok(())
+        }
+        [subcommand, group, items @ ..] if subcommand == "remove" => {
+            let group = registry::remove_group_items(&resolution, group, items)?;
+            println!(
+                "Updated group `{}`: {} items",
+                group.name,
+                group.items.len()
+            );
+            Ok(())
+        }
+        [subcommand, group] if subcommand == "link" => {
+            let report = link_group_current_project(group)?;
+            print_link_group_report(&report);
+            Ok(())
+        }
+        [subcommand, group] if subcommand == "unlink" => {
+            let report = unlink_group_current_project(group)?;
+            print_unlink_report(&report);
+            Ok(())
+        }
+        [] => Err(Error::invalid_arguments(
+            "usage: aglink group <create|list|show|rename|delete|add|remove|link|unlink>",
+        )),
+        _ => Err(Error::invalid_arguments(
+            "usage: aglink group <create|list|show|rename|delete|add|remove|link|unlink>",
+        )),
+    }
+}
+
+fn print_group(group: &Group) {
+    println!("Id: {}", group.id);
+    println!("Name: {}", group.name);
+    if let Some(description) = &group.description {
+        println!("Description: {description}");
+    }
+    println!("Items: {}", group.items.len());
+    for item in &group.items {
+        println!(
+            "  {}\t{}\t{}",
+            item.item_type,
+            item.name,
+            item.source_path.display()
+        );
+    }
 }
 
 fn run_linkable(args: Vec<String>, item_type: LinkableItemType) -> Result<()> {

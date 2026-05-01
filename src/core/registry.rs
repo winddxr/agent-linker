@@ -1,6 +1,7 @@
 //! Linkable item registry entry point.
 
 use std::{
+    collections::BTreeSet,
     path::{Path, PathBuf},
     time::{SystemTime, UNIX_EPOCH},
 };
@@ -28,17 +29,81 @@ pub struct AddLinkableItem {
     pub description: Option<String>,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Group {
+    pub id: String,
+    pub name: String,
+    pub description: Option<String>,
+    pub created_at: String,
+    pub updated_at: String,
+    pub items: Vec<LinkableItem>,
+}
+
+pub struct RegistryStore {
+    connection: Connection,
+}
+
+impl RegistryStore {
+    pub fn open(resolution: &DbPathResolution) -> Result<Self> {
+        Ok(Self {
+            connection: open_migrated_connection(resolution)?,
+        })
+    }
+
+    pub fn add_item(&self, request: AddLinkableItem) -> Result<LinkableItem> {
+        add_item_with_connection(&self.connection, request)
+    }
+
+    pub fn list_items(&self, item_type: LinkableItemType) -> Result<Vec<LinkableItem>> {
+        list_items_with_connection(&self.connection, item_type)
+    }
+
+    pub fn find_item(&self, item_type: LinkableItemType, identifier: &str) -> Result<LinkableItem> {
+        find_item_with_connection(&self.connection, item_type, identifier)
+    }
+
+    pub fn find_any_item(&self, identifier: &str) -> Result<LinkableItem> {
+        find_any_item_with_connection(&self.connection, identifier)
+    }
+
+    pub fn create_group(&self, name: &str, description: Option<&str>) -> Result<Group> {
+        create_group_with_connection(&self.connection, name, description)
+    }
+
+    pub fn list_groups(&self) -> Result<Vec<Group>> {
+        list_groups_with_connection(&self.connection)
+    }
+
+    pub fn show_group(&self, identifier: &str) -> Result<Group> {
+        find_group_with_connection(&self.connection, identifier)
+    }
+
+    pub fn rename_group(&self, identifier: &str, new_name: &str) -> Result<Group> {
+        rename_group_with_connection(&self.connection, identifier, new_name)
+    }
+
+    pub fn delete_group(&self, identifier: &str) -> Result<Group> {
+        delete_group_with_connection(&self.connection, identifier)
+    }
+
+    pub fn add_group_items(&self, group: &str, items: &[String]) -> Result<Group> {
+        add_group_items_with_connection(&self.connection, group, items)
+    }
+
+    pub fn remove_group_items(&self, group: &str, items: &[String]) -> Result<Group> {
+        remove_group_items_with_connection(&self.connection, group, items)
+    }
+}
+
 pub fn add_item(resolution: &DbPathResolution, request: AddLinkableItem) -> Result<LinkableItem> {
-    let connection = open_migrated_connection(resolution)?;
-    add_item_with_connection(&connection, request)
+    RegistryStore::open(resolution)?.add_item(request)
 }
 
 pub fn list_items(
     resolution: &DbPathResolution,
     item_type: LinkableItemType,
 ) -> Result<Vec<LinkableItem>> {
-    let connection = open_migrated_connection(resolution)?;
-    list_items_with_connection(&connection, item_type)
+    RegistryStore::open(resolution)?.list_items(item_type)
 }
 
 pub fn show_item(
@@ -46,8 +111,7 @@ pub fn show_item(
     item_type: LinkableItemType,
     identifier: &str,
 ) -> Result<LinkableItem> {
-    let connection = open_migrated_connection(resolution)?;
-    find_item_with_connection(&connection, item_type, identifier)
+    RegistryStore::open(resolution)?.find_item(item_type, identifier)
 }
 
 pub fn rename_item(
@@ -120,6 +184,50 @@ pub fn refresh_item(
     )?;
 
     find_item_with_connection(&connection, item_type, identifier)
+}
+
+pub fn create_group(
+    resolution: &DbPathResolution,
+    name: &str,
+    description: Option<&str>,
+) -> Result<Group> {
+    RegistryStore::open(resolution)?.create_group(name, description)
+}
+
+pub fn list_groups(resolution: &DbPathResolution) -> Result<Vec<Group>> {
+    RegistryStore::open(resolution)?.list_groups()
+}
+
+pub fn show_group(resolution: &DbPathResolution, identifier: &str) -> Result<Group> {
+    RegistryStore::open(resolution)?.show_group(identifier)
+}
+
+pub fn rename_group(
+    resolution: &DbPathResolution,
+    identifier: &str,
+    new_name: &str,
+) -> Result<Group> {
+    RegistryStore::open(resolution)?.rename_group(identifier, new_name)
+}
+
+pub fn delete_group(resolution: &DbPathResolution, identifier: &str) -> Result<Group> {
+    RegistryStore::open(resolution)?.delete_group(identifier)
+}
+
+pub fn add_group_items(
+    resolution: &DbPathResolution,
+    group: &str,
+    items: &[String],
+) -> Result<Group> {
+    RegistryStore::open(resolution)?.add_group_items(group, items)
+}
+
+pub fn remove_group_items(
+    resolution: &DbPathResolution,
+    group: &str,
+    items: &[String],
+) -> Result<Group> {
+    RegistryStore::open(resolution)?.remove_group_items(group, items)
 }
 
 fn add_item_with_connection(
@@ -217,6 +325,39 @@ fn find_item_with_connection(
     item.ok_or_else(|| Error::database(format!("unknown {} `{identifier}`", item_type.as_str())))
 }
 
+fn find_any_item_with_connection(
+    connection: &Connection,
+    identifier: &str,
+) -> Result<LinkableItem> {
+    let mut matches = Vec::new();
+
+    for item_type in [LinkableItemType::Skill, LinkableItemType::Resource] {
+        let mut statement = connection.prepare(
+            r#"
+            SELECT id, kind, name, alias, source_path, source_kind, target_dir, description,
+                   created_at, updated_at, source_type, source_ownership, repo_url, repo_commit
+            FROM linkable_items
+            WHERE kind = ?1 AND (id = ?2 OR name = ?2 OR alias = ?2)
+            ORDER BY name
+            "#,
+        )?;
+        let rows = statement.query_map(params![item_type.as_str(), identifier], item_from_row)?;
+        for row in rows {
+            matches.push(row?);
+        }
+    }
+
+    match matches.len() {
+        0 => Err(Error::database(format!(
+            "unknown linkable item `{identifier}`"
+        ))),
+        1 => Ok(matches.remove(0)),
+        _ => Err(Error::invalid_arguments(format!(
+            "linkable item `{identifier}` is ambiguous; use a registry id"
+        ))),
+    }
+}
+
 fn find_item_by_id(connection: &Connection, id: &str) -> Result<LinkableItem> {
     connection
         .query_row(
@@ -230,6 +371,223 @@ fn find_item_by_id(connection: &Connection, id: &str) -> Result<LinkableItem> {
             item_from_row,
         )
         .map_err(Error::from)
+}
+
+fn create_group_with_connection(
+    connection: &Connection,
+    name: &str,
+    description: Option<&str>,
+) -> Result<Group> {
+    validate_item_name(name, "group name")?;
+    ensure_group_name_available(connection, name, None)?;
+
+    let now = timestamp();
+    let id = generate_group_id(name);
+    connection.execute(
+        r#"
+        INSERT INTO groups (id, name, description, created_at, updated_at)
+        VALUES (?1, ?2, ?3, ?4, ?4)
+        "#,
+        params![id, name, description, now],
+    )?;
+
+    find_group_with_connection(connection, name)
+}
+
+fn list_groups_with_connection(connection: &Connection) -> Result<Vec<Group>> {
+    let mut statement = connection.prepare(
+        r#"
+        SELECT id, name, description, created_at, updated_at
+        FROM groups
+        ORDER BY name
+        "#,
+    )?;
+    let rows = statement.query_map([], group_from_row)?;
+    let mut groups = Vec::new();
+    for row in rows {
+        let mut group = row?;
+        group.items = group_items_with_connection(connection, &group.id)?;
+        groups.push(group);
+    }
+    Ok(groups)
+}
+
+fn find_group_with_connection(connection: &Connection, identifier: &str) -> Result<Group> {
+    let mut group = connection
+        .query_row(
+            r#"
+            SELECT id, name, description, created_at, updated_at
+            FROM groups
+            WHERE id = ?1 OR name = ?1
+            "#,
+            params![identifier],
+            group_from_row,
+        )
+        .optional()?
+        .ok_or_else(|| Error::database(format!("unknown group `{identifier}`")))?;
+
+    group.items = group_items_with_connection(connection, &group.id)?;
+    Ok(group)
+}
+
+fn rename_group_with_connection(
+    connection: &Connection,
+    identifier: &str,
+    new_name: &str,
+) -> Result<Group> {
+    validate_item_name(new_name, "group name")?;
+    let group = find_group_with_connection(connection, identifier)?;
+    ensure_group_name_available(connection, new_name, Some(&group.id))?;
+
+    connection.execute(
+        r#"
+        UPDATE groups
+        SET name = ?2, updated_at = ?3
+        WHERE id = ?1
+        "#,
+        params![group.id, new_name, timestamp()],
+    )?;
+
+    find_group_with_connection(connection, new_name)
+}
+
+fn delete_group_with_connection(connection: &Connection, identifier: &str) -> Result<Group> {
+    let group = find_group_with_connection(connection, identifier)?;
+    connection.execute("DELETE FROM groups WHERE id = ?1", params![group.id])?;
+    Ok(group)
+}
+
+fn add_group_items_with_connection(
+    connection: &Connection,
+    group_identifier: &str,
+    item_identifiers: &[String],
+) -> Result<Group> {
+    if item_identifiers.is_empty() {
+        return Err(Error::invalid_arguments(
+            "group add requires at least one item",
+        ));
+    }
+
+    let group = find_group_with_connection(connection, group_identifier)?;
+    let mut items = Vec::new();
+    let mut seen = BTreeSet::new();
+    for identifier in item_identifiers {
+        let item = find_any_item_with_connection(connection, identifier)?;
+        if !seen.insert(item.id.clone()) {
+            return Err(Error::invalid_arguments(format!(
+                "group add contains duplicate item `{}`",
+                item.name
+            )));
+        }
+        let exists: Option<String> = connection
+            .query_row(
+                "SELECT item_id FROM group_items WHERE group_id = ?1 AND item_id = ?2",
+                params![group.id, item.id],
+                |row| row.get(0),
+            )
+            .optional()?;
+        if exists.is_some() {
+            return Err(Error::invalid_arguments(format!(
+                "group `{}` already contains item `{}`",
+                group.name, item.name
+            )));
+        }
+        items.push(item);
+    }
+
+    for item in items {
+        connection.execute(
+            r#"
+            INSERT INTO group_items (group_id, item_id, created_at)
+            VALUES (?1, ?2, ?3)
+            "#,
+            params![group.id, item.id, timestamp()],
+        )?;
+    }
+
+    find_group_with_connection(connection, &group.id)
+}
+
+fn remove_group_items_with_connection(
+    connection: &Connection,
+    group_identifier: &str,
+    item_identifiers: &[String],
+) -> Result<Group> {
+    if item_identifiers.is_empty() {
+        return Err(Error::invalid_arguments(
+            "group remove requires at least one item",
+        ));
+    }
+
+    let group = find_group_with_connection(connection, group_identifier)?;
+    let mut items = Vec::new();
+    let mut seen = BTreeSet::new();
+    for identifier in item_identifiers {
+        let item = find_any_item_with_connection(connection, identifier)?;
+        if !seen.insert(item.id.clone()) {
+            return Err(Error::invalid_arguments(format!(
+                "group remove contains duplicate item `{}`",
+                item.name
+            )));
+        }
+        let exists: Option<String> = connection
+            .query_row(
+                "SELECT item_id FROM group_items WHERE group_id = ?1 AND item_id = ?2",
+                params![group.id, item.id],
+                |row| row.get(0),
+            )
+            .optional()?;
+        if exists.is_none() {
+            return Err(Error::invalid_arguments(format!(
+                "group `{}` does not contain item `{}`",
+                group.name, item.name
+            )));
+        }
+        items.push(item);
+    }
+
+    for item in items {
+        connection.execute(
+            "DELETE FROM group_items WHERE group_id = ?1 AND item_id = ?2",
+            params![group.id, item.id],
+        )?;
+    }
+
+    find_group_with_connection(connection, &group.id)
+}
+
+fn group_items_with_connection(
+    connection: &Connection,
+    group_id: &str,
+) -> Result<Vec<LinkableItem>> {
+    let mut statement = connection.prepare(
+        r#"
+        SELECT i.id, i.kind, i.name, i.alias, i.source_path, i.source_kind, i.target_dir,
+               i.description, i.created_at, i.updated_at, i.source_type, i.source_ownership,
+               i.repo_url, i.repo_commit
+        FROM group_items gi
+        JOIN linkable_items i ON i.id = gi.item_id
+        WHERE gi.group_id = ?1
+        ORDER BY i.kind, i.name
+        "#,
+    )?;
+    let rows = statement.query_map(params![group_id], item_from_row)?;
+    let mut items = Vec::new();
+    for row in rows {
+        items.push(row?);
+    }
+    Ok(items)
+}
+
+fn group_from_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<Group> {
+    Ok(Group {
+        id: row.get(0)?,
+        name: row.get(1)?,
+        description: row.get(2)?,
+        created_at: row.get(3)?,
+        updated_at: row.get(4)?,
+        items: Vec::new(),
+    })
 }
 
 fn item_from_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<LinkableItem> {
@@ -325,6 +683,31 @@ fn ensure_link_name_available(
     Ok(())
 }
 
+fn ensure_group_name_available(
+    connection: &Connection,
+    name: &str,
+    excluding_id: Option<&str>,
+) -> Result<()> {
+    let existing = connection
+        .query_row(
+            "SELECT id FROM groups WHERE name = ?1",
+            params![name],
+            |row| row.get::<_, String>(0),
+        )
+        .optional()?;
+
+    if let Some(id) = existing {
+        if excluding_id == Some(id.as_str()) {
+            return Ok(());
+        }
+        return Err(Error::invalid_arguments(format!(
+            "group `{name}` already exists"
+        )));
+    }
+
+    Ok(())
+}
+
 fn link_name_for_request(request: &AddLinkableItem, source_path: &Path) -> String {
     if let Some(alias) = &request.alias {
         return alias.clone();
@@ -358,6 +741,16 @@ fn generate_id(item_type: LinkableItemType, name: &str) -> String {
     )
 }
 
+fn generate_group_id(name: &str) -> String {
+    format!(
+        "group:{}:{}",
+        name,
+        SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .map_or(0, |duration| duration.as_nanos())
+    )
+}
+
 fn timestamp() -> String {
     let seconds = SystemTime::now()
         .duration_since(UNIX_EPOCH)
@@ -368,8 +761,9 @@ fn timestamp() -> String {
 #[cfg(test)]
 mod tests {
     use super::{
-        add_item, list_items, refresh_item, remove_item, rename_item, show_item, AddLinkableItem,
-        LinkableItemType,
+        add_group_items, add_item, create_group, delete_group, list_items, refresh_item,
+        remove_group_items, remove_item, rename_group, rename_item, show_group, show_item,
+        AddLinkableItem, LinkableItemType,
     };
     use crate::core::db::{migrate_database, DbPathReason, DbPathResolution};
     use crate::core::symlink::LinkKind;
@@ -795,5 +1189,53 @@ mod tests {
                 .len(),
             1
         );
+    }
+
+    #[test]
+    fn group_lifecycle_tracks_items_without_touching_sources() {
+        let temp_dir = TestDir::new("group-lifecycle");
+        let source = temp_dir.path().join("skill-source");
+        fs::create_dir(&source).unwrap();
+        fs::write(source.join("SKILL.md"), "stable").unwrap();
+        let resolution = resolution(temp_dir.path());
+        migrate_database(&resolution).unwrap();
+
+        add_item(
+            &resolution,
+            AddLinkableItem {
+                item_type: LinkableItemType::Skill,
+                name: "writer".to_string(),
+                alias: None,
+                source_path: source.clone(),
+                default_target_dir: None,
+                description: None,
+            },
+        )
+        .unwrap();
+        let group = create_group(&resolution, "daily", None).unwrap();
+        assert_eq!(group.items.len(), 0);
+
+        let updated = add_group_items(&resolution, "daily", &["writer".to_string()]).unwrap();
+        assert_eq!(updated.items.len(), 1);
+        assert_eq!(
+            show_group(&resolution, "daily").unwrap().items[0].name,
+            "writer"
+        );
+
+        let duplicate = add_group_items(&resolution, "daily", &["writer".to_string()]).unwrap_err();
+        assert!(duplicate.to_string().contains("already contains"));
+
+        let missing = add_group_items(&resolution, "daily", &["missing".to_string()]).unwrap_err();
+        assert!(missing.to_string().contains("unknown linkable item"));
+
+        let renamed = rename_group(&resolution, "daily", "workday").unwrap();
+        assert_eq!(renamed.name, "workday");
+
+        let removed = remove_group_items(&resolution, "workday", &["writer".to_string()]).unwrap();
+        assert!(removed.items.is_empty());
+        let deleted = delete_group(&resolution, "workday").unwrap();
+        assert_eq!(deleted.name, "workday");
+        assert!(source.join("SKILL.md").is_file());
+        assert!(show_group(&resolution, "workday").is_err());
     }
 }

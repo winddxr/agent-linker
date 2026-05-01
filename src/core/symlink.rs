@@ -153,6 +153,10 @@ impl SymlinkError {
         self.broker_code.as_deref()
     }
 
+    pub fn detail(&self) -> Option<&str> {
+        self.detail.as_deref()
+    }
+
     pub fn with_source(mut self, source: impl Into<PathBuf>) -> Self {
         self.source = Some(source.into());
         self

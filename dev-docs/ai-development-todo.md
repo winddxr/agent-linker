@@ -152,15 +152,23 @@
 
 目标：补齐批量管理、清理和诊断能力。
 
-- [ ] 实现 group create/list/show/rename/delete。
-- [ ] 实现 group add/remove item，并验证不存在 item、重复 item 和删除 group 不删除 source。
-- [ ] 实现 group link/unlink，内部复用统一 link/unlink 能力。
-- [ ] 实现批量命令时评估 Global Store / Framework Adapter 连接复用；若单个命令会连续执行多个 registry/framework 操作，应避免重复打开连接和重复运行 migration/seed。
-- [ ] 为 Registry / Framework 批量操作设计连接复用 API，避免 group 批量命令为每个 item 重复 open/migrate/seed。
-- [ ] 实现 `clean`、`clean --broken`、`clean --missing-source`，只处理 manifest 管理的 symlink。
-- [ ] 实现 `doctor` 检查数据库、migration、manifest、Framework Adapter、symlink backend 和 Windows Broker 可用性。
-- [ ] 增加 `--verbose` 诊断输出，包含 backend、系统错误码和 Broker 诊断信息。
-- [ ] 用临时数据库和临时项目测试 group/link/clean/doctor 的主要路径。
+- [x] 实现 group create/list/show/rename/delete。
+- [x] 实现 group add/remove item，并验证不存在 item、重复 item 和删除 group 不删除 source。
+- [x] 实现 group link/unlink，内部复用统一 link/unlink 能力。
+- [x] 实现批量命令时评估 Global Store / Framework Adapter 连接复用；若单个命令会连续执行多个 registry/framework 操作，应避免重复打开连接和重复运行 migration/seed。
+- [x] 为 Registry / Framework 批量操作设计连接复用 API，避免 group 批量命令为每个 item 重复 open/migrate/seed。
+- [x] 实现 `clean`、`clean --broken`、`clean --missing-source`，只处理 manifest 管理的 symlink。
+- [x] 实现 `doctor` 检查数据库、migration、manifest、Framework Adapter、symlink backend 和 Windows Broker 可用性。
+- [x] 增加 `--verbose` 诊断输出，包含 backend、系统错误码和 Broker 诊断信息。
+- [x] 用临时数据库和临时项目测试 group/link/clean/doctor 的主要路径。
+
+阶段 6 验证备注（2026-05-01）：
+
+- 已运行：`cargo fmt --check`、`cargo check --locked`、`cargo test --locked`、`cargo run --locked -- --help`。
+- `cargo test --locked` 结果：47 个测试通过，0 个失败。
+- 新增测试使用临时 SQLite 数据库、临时 source、临时项目 manifest 和 mock symlink provider 覆盖 group lifecycle、group link/unlink、clean 只清理 manifest 管理链接、`clean --missing-source`，以及 doctor 的数据库、manifest、Framework Adapter 和 backend 检查。
+- 使用临时 `AGLINK_HOME=.tmp-stage6-cli/home` 验证 CLI：`db migrate`、`skill add`、`group create`、`group add`、`group show`、`doctor --verbose`。
+- 沙箱内直接运行 `aglink.exe doctor --verbose` 能正确报告 Windows Broker pipe 权限问题：`broker_code=SERVICE_UNAVAILABLE`；同一命令提权运行后 Windows Broker probe 通过并返回 `windows-broker available`。
 
 验收：批量操作与单项操作表现一致；clean 不会删除未记录在 manifest 中的文件或链接。
 
@@ -175,11 +183,15 @@
 - [ ] 统一默认、`--quiet`、`--verbose` 输出格式。
 - [ ] 评估 `status --json` 是否引入 `serde_json` 或集中 JSON 输出工具，替代 command 层手写 JSON 拼接；若暂不引入依赖，至少固定 JSON escaping 测试与字段维护规则。
 - [ ] 评估 `aglink link --force` 是否进入正式命令面；若加入，只允许替换错误 symlink，并补齐 WrongSymlinkTarget 的用户提示。
+- [ ] 改善 broken symlink 与 force 相关的用户提示；保持 force 不删除真实文件目录、不把缺失 source 当作可修复成功状态。
 - [ ] 评估 `link` 创建缺失父目录时是否在报告中返回 created dirs，并在默认或 verbose 输出中提示用户。
 - [ ] 评估是否引入 `clap` 或集中参数解析，替代 command 层手写 flag index 解析。
 - [ ] 审查 command 层，确保没有直接 SQL、manifest 读写或平台 symlink API 调用。
 - [ ] 添加架构边界测试或静态检查，防止 `commands` 绕过 core。
 - [ ] 抽取重复小工具：`timestamp()`、`bool_to_i64()`、`LinkKind` 字符串解析，以及测试中的临时目录 helper；优先放入语义明确的 `core::util` / `core::test_support`，不要把非路径工具塞进 `paths.rs`。
+- [ ] 复查 clean 的 missing-source 判定，区分真实 NotFound 与权限等其他 metadata 错误，避免把不可诊断的 IO 错误静默当成 source missing。
+- [ ] 评估 unlink/clean 内部选中记录的索引集合是否改用 `HashSet` / `BTreeSet`，避免 manifest 增大后 `Vec::contains` 形成不必要的 O(n²) 扫描。
+- [ ] 评估 group link 内部是否可避免 `group.items.clone()`，在不牺牲接口清晰度的前提下降低大 group 的额外分配。
 - [ ] 复查 `unlink <name>` 的匹配规则和提示文案，特别是按 link path 文件名匹配的便利行为；保留时应确保歧义提示要求使用 manifest id 或完整 link path。
 - [ ] 补齐 README 或开发说明中的真实构建、测试、运行命令；不要复制过长设计内容到根 `AGENTS.md`。
 
