@@ -11,10 +11,10 @@ Usage: aglink <COMMAND>
 Commands:
   init        Initialize Agent Linker project files
   config      Manage global configuration
-  db          Manage the global database
-  framework   Manage Agent framework mappings
-  skill       Manage registered skills
-  resource    Manage registered resources
+  db          Manage the global database (path, migrate, check)
+  framework   Manage Agent framework mappings (list, show, enable, disable, mapping list)
+  skill       Manage registered skills (add, list, show, rename, remove, refresh)
+  resource    Manage registered resources (add, list, show, rename, remove, refresh)
   group       Manage item groups
   link        Link a registered item into the current project
   unlink      Remove managed links from the current project

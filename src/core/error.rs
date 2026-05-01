@@ -6,6 +6,7 @@ pub type Result<T> = std::result::Result<T, Error>;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Error {
+    Database(String),
     InvalidArguments(String),
     Manifest(String),
     NotImplemented(String),
@@ -15,6 +16,10 @@ pub enum Error {
 }
 
 impl Error {
+    pub fn database(message: impl Into<String>) -> Self {
+        Self::Database(message.into())
+    }
+
     pub fn invalid_arguments(message: impl Into<String>) -> Self {
         Self::InvalidArguments(message.into())
     }
@@ -35,6 +40,7 @@ impl Error {
 impl fmt::Display for Error {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
+            Error::Database(message) => write!(formatter, "{message}"),
             Error::InvalidArguments(message) => write!(formatter, "{message}"),
             Error::Manifest(message) => write!(formatter, "{message}"),
             Error::NotImplemented(message) => write!(formatter, "{message}"),

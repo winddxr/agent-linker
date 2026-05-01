@@ -9,6 +9,9 @@ publish = false
 win-symlinks-client = { git = "https://github.com/winddxr/win-symlinks", package = "win-symlinks-client" }
 windows = { version = "0.62", features = ["Win32_Security"] }
 
+[dependencies]
+rusqlite = { version = "0.32", features = ["bundled"] }
+
 [[bin]]
 name = "aglink"
 path = "src/main.rs"

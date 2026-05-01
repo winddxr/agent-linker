@@ -79,13 +79,20 @@
 
 目标：完成全局 SQLite 基础设施和内置框架数据模型。
 
-- [ ] 实现数据库路径解析：默认平台路径、portable `agent-linker.db`、`AGLINK_DB`、`AGLINK_HOME`。
-- [ ] 实现 `db path`，输出实际路径和解析原因。
-- [ ] 建立版本化 migration，至少覆盖 config、framework、mapping、linkable item、group 所需表。
-- [ ] 实现 `db migrate`、`db check` 的 core API 和 CLI 命令。
-- [ ] 实现内置 `claude` framework 与默认 mapping 的初始化或 migration seed。
-- [ ] 实现 framework list/show/enable/disable/mapping list 的最小命令。
-- [ ] 用临时数据库测试 migration、framework seed、路径覆盖和诊断输出。
+- [x] 实现数据库路径解析：默认平台路径、portable `agent-linker.db`、`AGLINK_DB`、`AGLINK_HOME`。
+- [x] 实现 `db path`，输出实际路径和解析原因。
+- [x] 建立版本化 migration，至少覆盖 config、framework、mapping、linkable item、group 所需表。
+- [x] 实现 `db migrate`、`db check` 的 core API 和 CLI 命令。
+- [x] 实现内置 `claude` framework 与默认 mapping 的初始化或 migration seed。
+- [x] 实现 framework list/show/enable/disable/mapping list 的最小命令。
+- [x] 用临时数据库测试 migration、framework seed、路径覆盖和诊断输出。
+
+阶段 3 验证备注（2026-05-01）：
+
+- 已运行：`cargo fmt`、`cargo fmt --check`、`cargo check`、`cargo test`。
+- `cargo test` 结果：30 个测试通过，0 个失败。
+- 使用工作区临时 `AGLINK_HOME=.tmp-stage3-db` 验证 CLI：`cargo run -- db path`、`cargo run -- db migrate`、`cargo run -- db check`、`cargo run -- framework list`、`cargo run -- framework show claude`、`cargo run -- framework mapping list`、`cargo run -- framework disable claude`、`cargo run -- framework enable claude`。
+- `db check` 验证结果：schema `1 / latest 1`，frameworks `1`，mappings `2`，status `ok`。
 
 验收：全局数据库可初始化、迁移、检查；Framework Adapter 可通过结构化 API 提供 init/link 所需 mapping。
 
@@ -95,13 +102,20 @@
 
 目标：让 Skill 和 Resource 能进入全局 Registry，但不改变当前项目链接状态。
 
-- [ ] 实现 Linkable Item 领域模型，`source_path` 持久化为绝对路径。
-- [ ] 实现 Skill 注册校验：source 必须是目录且包含非空 `SKILL.md`。
-- [ ] 实现 Resource 注册校验：source 可为文件或目录，注册或链接时必须有目标目录。
-- [ ] 实现默认 link name 和默认项目相对 link path 计算。
-- [ ] 实现 skill add/list/show/rename/remove/refresh。
-- [ ] 实现 resource add/list/show/rename/remove/refresh。
-- [ ] 用临时数据库和临时 source 测试同名冲突、alias、kind 检测和 refresh 后 kind 不一致报错。
+- [x] 实现 Linkable Item 领域模型，`source_path` 持久化为绝对路径。
+- [x] 实现 Skill 注册校验：source 必须是目录且包含非空 `SKILL.md`。
+- [x] 实现 Resource 注册校验：source 可为文件或目录，注册或链接时必须有目标目录。
+- [x] 实现默认 link name 和默认项目相对 link path 计算。
+- [x] 实现 skill add/list/show/rename/remove/refresh。
+- [x] 实现 resource add/list/show/rename/remove/refresh。
+- [x] 用临时数据库和临时 source 测试同名冲突、alias、kind 检测和 refresh 后 kind 不一致报错。
+
+阶段 4 验证备注（2026-05-01）：
+
+- 已运行：`cargo fmt`、`cargo fmt --check`、`cargo check --locked`、`cargo test --locked`。
+- `cargo test --locked` 结果：39 个测试通过，0 个失败。
+- 使用工作区临时 `AGLINK_HOME=.tmp-stage4-cli/home` 验证 CLI：`cargo run --locked -- db migrate`、`cargo run --locked -- skill add writer <temp-skill> --alias writing-helper`、`cargo run --locked -- skill list`、`cargo run --locked -- skill show writer`、`cargo run --locked -- resource add notes <temp-resource> --target-dir .agents/resources`、`cargo run --locked -- resource list`、`cargo run --locked -- resource refresh notes`。
+- 阶段 4 的 registry 命令只写入全局 SQLite；未创建、删除或修改当前项目 symlink，也不复制、移动或删除 source 内容。
 
 验收：Registry 命令不创建、不删除、不修改任何当前项目 symlink；source 内容不被复制、移动或删除。
 
@@ -119,6 +133,7 @@
 - [ ] 实现 `aglink status` 和 `aglink status --json`，状态只来自 manifest 与实际文件系统检查。
 - [ ] 实现 `aglink unlink <name>`、`unlink --all`，只删除 manifest 管理的 symlink。
 - [ ] 用 mock provider、临时 manifest、临时数据库集成测试覆盖 link/status/unlink 核心流程。
+- [ ] 阶段 4/5 完成后复查 `paths.rs` 是否需要承接共享路径工具；只有当 `db`、`manifest`、`linkable` 或 `link/status` 出现实质重复路径解析逻辑时再迁移。
 
 验收：链接命令只处理 symlink，不覆盖真实文件目录；manifest 能完整支撑 status 和 unlink。
 
@@ -131,6 +146,7 @@
 - [ ] 实现 group create/list/show/rename/delete。
 - [ ] 实现 group add/remove item，并验证不存在 item、重复 item 和删除 group 不删除 source。
 - [ ] 实现 group link/unlink，内部复用统一 link/unlink 能力。
+- [ ] 实现批量命令时评估 Global Store / Framework Adapter 连接复用；若单个命令会连续执行多个 registry/framework 操作，应避免重复打开连接和重复运行 migration/seed。
 - [ ] 实现 `clean`、`clean --broken`、`clean --missing-source`，只处理 manifest 管理的 symlink。
 - [ ] 实现 `doctor` 检查数据库、migration、manifest、Framework Adapter、symlink backend 和 Windows Broker 可用性。
 - [ ] 增加 `--verbose` 诊断输出，包含 backend、系统错误码和 Broker 诊断信息。
