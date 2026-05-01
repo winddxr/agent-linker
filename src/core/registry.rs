@@ -3,7 +3,6 @@
 use std::{
     collections::BTreeSet,
     path::{Path, PathBuf},
-    time::{SystemTime, UNIX_EPOCH},
 };
 
 use rusqlite::{params, Connection, OptionalExtension};
@@ -17,6 +16,7 @@ use crate::core::{
         validate_resource_source, validate_skill_source, LinkableItem, LinkableItemType,
         SourceOwnership, SourceType,
     },
+    util::{timestamp, timestamp_nanos},
 };
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -731,31 +731,11 @@ fn path_to_registry_text(path: &Path, label: &str) -> Result<String> {
 }
 
 fn generate_id(item_type: LinkableItemType, name: &str) -> String {
-    format!(
-        "{}:{}:{}",
-        item_type.as_str(),
-        name,
-        SystemTime::now()
-            .duration_since(UNIX_EPOCH)
-            .map_or(0, |duration| duration.as_nanos())
-    )
+    format!("{}:{}:{}", item_type.as_str(), name, timestamp_nanos())
 }
 
 fn generate_group_id(name: &str) -> String {
-    format!(
-        "group:{}:{}",
-        name,
-        SystemTime::now()
-            .duration_since(UNIX_EPOCH)
-            .map_or(0, |duration| duration.as_nanos())
-    )
-}
-
-fn timestamp() -> String {
-    let seconds = SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .map_or(0, |duration| duration.as_secs());
-    format!("unix:{seconds}")
+    format!("group:{}:{}", name, timestamp_nanos())
 }
 
 #[cfg(test)]
@@ -767,42 +747,13 @@ mod tests {
     };
     use crate::core::db::{migrate_database, DbPathReason, DbPathResolution};
     use crate::core::symlink::LinkKind;
+    use crate::core::test_support::TestDir;
     #[cfg(unix)]
     use std::{ffi::OsString, os::unix::ffi::OsStringExt};
     use std::{
         fs,
         path::{Path, PathBuf},
-        time::{SystemTime, UNIX_EPOCH},
     };
-
-    struct TestDir {
-        path: PathBuf,
-    }
-
-    impl TestDir {
-        fn new(label: &str) -> Self {
-            let unique = SystemTime::now()
-                .duration_since(UNIX_EPOCH)
-                .unwrap()
-                .as_nanos();
-            let path = std::env::temp_dir().join(format!(
-                "agent-linker-registry-{label}-{}-{unique}",
-                std::process::id()
-            ));
-            fs::create_dir(&path).unwrap();
-            Self { path }
-        }
-
-        fn path(&self) -> &Path {
-            &self.path
-        }
-    }
-
-    impl Drop for TestDir {
-        fn drop(&mut self) {
-            let _ = fs::remove_dir_all(&self.path);
-        }
-    }
 
     fn resolution(temp_dir: &Path) -> DbPathResolution {
         DbPathResolution {

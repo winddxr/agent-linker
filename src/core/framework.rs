@@ -1,6 +1,9 @@
 //! Agent framework adapter entry point.
 
-use std::path::{Path, PathBuf};
+use std::{
+    path::{Component, Path, PathBuf},
+    str::FromStr,
+};
 
 use rusqlite::{params, OptionalExtension};
 
@@ -8,6 +11,7 @@ use crate::core::{
     db::{open_migrated_connection, DbPathResolution},
     error::{Error, Result},
     symlink::LinkKind,
+    util::{bool_to_i64, timestamp, timestamp_nanos},
 };
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -104,6 +108,14 @@ pub struct StoredFrameworkMapping {
     pub required: bool,
     pub created_at: String,
     pub updated_at: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct AddFrameworkMapping {
+    pub framework: String,
+    pub source_path: PathBuf,
+    pub link_path: PathBuf,
+    pub link_kind: LinkKind,
 }
 
 pub fn list_frameworks(resolution: &DbPathResolution) -> Result<Vec<StoredFramework>> {
@@ -218,6 +230,83 @@ pub fn enabled_framework_mappings(
     Ok(mappings)
 }
 
+pub fn add_mapping(
+    resolution: &DbPathResolution,
+    request: AddFrameworkMapping,
+) -> Result<StoredFrameworkMapping> {
+    validate_mapping_path(&request.source_path, "source path")?;
+    validate_mapping_path(&request.link_path, "link path")?;
+    let connection = open_migrated_connection(resolution)?;
+    let framework_id = find_framework_id(&connection, &request.framework)?;
+    let source_text = path_to_db_text(&request.source_path, "source path")?;
+    let link_text = path_to_db_text(&request.link_path, "link path")?;
+
+    let existing: Option<String> = connection
+        .query_row(
+            r#"
+            SELECT id
+            FROM framework_mappings
+            WHERE framework_id = ?1 AND link_path = ?2
+            "#,
+            params![framework_id, link_text],
+            |row| row.get(0),
+        )
+        .optional()?;
+    if existing.is_some() {
+        return Err(Error::invalid_arguments(format!(
+            "framework `{}` already has mapping for `{}`",
+            request.framework,
+            request.link_path.display()
+        )));
+    }
+
+    let id = format!("mapping:{}:{}", framework_id, timestamp_nanos());
+    let now = timestamp();
+    connection.execute(
+        r#"
+        INSERT INTO framework_mappings
+            (id, framework_id, source_path, link_path, link_kind, required, created_at, updated_at)
+        VALUES
+            (?1, ?2, ?3, ?4, ?5, 0, ?6, ?6)
+        "#,
+        params![
+            id,
+            framework_id,
+            source_text,
+            link_text,
+            request.link_kind.to_string(),
+            now,
+        ],
+    )?;
+
+    find_mapping_by_id(&connection, &id)
+}
+
+pub fn remove_mapping(
+    resolution: &DbPathResolution,
+    framework: &str,
+    link_path: &Path,
+) -> Result<StoredFrameworkMapping> {
+    validate_mapping_path(link_path, "link path")?;
+    let connection = open_migrated_connection(resolution)?;
+    let framework_id = find_framework_id(&connection, framework)?;
+    let link_text = path_to_db_text(link_path, "link path")?;
+    let mapping = find_mapping_by_framework_and_link(&connection, &framework_id, &link_text)?;
+
+    if mapping.required {
+        return Err(Error::invalid_arguments(format!(
+            "required framework mapping `{}` cannot be removed",
+            mapping.id
+        )));
+    }
+
+    connection.execute(
+        "DELETE FROM framework_mappings WHERE id = ?1",
+        params![&mapping.id],
+    )?;
+    Ok(mapping)
+}
+
 fn set_framework_enabled(
     resolution: &DbPathResolution,
     framework_id: &str,
@@ -294,7 +383,7 @@ fn stored_mapping_from_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<StoredFr
         framework_id: row.get(1)?,
         source_path: PathBuf::from(row.get::<_, String>(2)?),
         link_path: PathBuf::from(row.get::<_, String>(3)?),
-        link_kind: parse_link_kind(&link_kind).map_err(|error| {
+        link_kind: LinkKind::from_str(&link_kind).map_err(|error| {
             rusqlite::Error::FromSqlConversionFailure(
                 4,
                 rusqlite::types::Type::Text,
@@ -307,51 +396,98 @@ fn stored_mapping_from_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<StoredFr
     })
 }
 
-fn parse_link_kind(value: &str) -> std::result::Result<LinkKind, ParseLinkKindError> {
-    match value {
-        "file" => Ok(LinkKind::File),
-        "directory" => Ok(LinkKind::Directory),
-        _ => Err(ParseLinkKindError(value.to_string())),
-    }
-}
-
-#[derive(Debug)]
-struct ParseLinkKindError(String);
-
-impl std::fmt::Display for ParseLinkKindError {
-    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(formatter, "unknown link kind `{}`", self.0)
-    }
-}
-
-impl std::error::Error for ParseLinkKindError {}
-
-fn bool_to_i64(value: bool) -> i64 {
-    if value {
-        1
-    } else {
-        0
-    }
-}
-
 fn int_to_bool(value: i64) -> bool {
     value != 0
 }
 
-fn timestamp() -> String {
-    use std::time::{SystemTime, UNIX_EPOCH};
+fn find_framework_id(connection: &rusqlite::Connection, framework: &str) -> Result<String> {
+    connection
+        .query_row(
+            "SELECT id FROM frameworks WHERE id = ?1 OR name = ?1",
+            params![framework],
+            |row| row.get(0),
+        )
+        .optional()?
+        .ok_or_else(|| Error::database(format!("unknown framework `{framework}`")))
+}
 
-    let seconds = SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .map_or(0, |duration| duration.as_secs());
-    format!("unix:{seconds}")
+fn find_mapping_by_id(
+    connection: &rusqlite::Connection,
+    id: &str,
+) -> Result<StoredFrameworkMapping> {
+    connection
+        .query_row(
+            r#"
+            SELECT id, framework_id, source_path, link_path, link_kind, required, created_at, updated_at
+            FROM framework_mappings
+            WHERE id = ?1
+            "#,
+            params![id],
+            stored_mapping_from_row,
+        )
+        .map_err(Error::from)
+}
+
+fn find_mapping_by_framework_and_link(
+    connection: &rusqlite::Connection,
+    framework_id: &str,
+    link_path: &str,
+) -> Result<StoredFrameworkMapping> {
+    connection
+        .query_row(
+            r#"
+            SELECT id, framework_id, source_path, link_path, link_kind, required, created_at, updated_at
+            FROM framework_mappings
+            WHERE framework_id = ?1 AND link_path = ?2
+            "#,
+            params![framework_id, link_path],
+            stored_mapping_from_row,
+        )
+        .optional()?
+        .ok_or_else(|| {
+            Error::database(format!(
+                "framework `{framework_id}` has no mapping for `{link_path}`"
+            ))
+        })
+}
+
+fn validate_mapping_path(path: &Path, label: &str) -> Result<()> {
+    if path.as_os_str().is_empty() {
+        return Err(Error::invalid_arguments(format!(
+            "{label} must not be empty"
+        )));
+    }
+
+    if path.is_absolute()
+        || path.components().any(|component| {
+            matches!(
+                component,
+                Component::ParentDir | Component::RootDir | Component::Prefix(_)
+            )
+        })
+    {
+        return Err(Error::invalid_arguments(format!(
+            "{label} must stay inside the project: {}",
+            path.display()
+        )));
+    }
+    Ok(())
+}
+
+fn path_to_db_text(path: &Path, label: &str) -> Result<String> {
+    path.to_str().map(str::to_string).ok_or_else(|| {
+        Error::invalid_arguments(format!(
+            "{label} must be valid UTF-8 to store in the global registry"
+        ))
+    })
 }
 
 #[cfg(test)]
 mod tests {
     use super::{
-        default_init_mappings, disable_framework, enable_framework, enabled_framework_mappings,
-        list_all_mappings, list_frameworks, show_framework,
+        add_mapping, default_init_mappings, disable_framework, enable_framework,
+        enabled_framework_mappings, list_all_mappings, list_frameworks, remove_mapping,
+        show_framework, AddFrameworkMapping,
     };
     use crate::core::db::{migrate_database, DbPathReason, DbPathResolution};
     use crate::core::symlink::LinkKind;
@@ -418,6 +554,50 @@ mod tests {
         assert!(enabled_framework_mappings(&resolution).unwrap().is_empty());
         enable_framework(&resolution, "claude").unwrap();
         assert_eq!(enabled_framework_mappings(&resolution).unwrap().len(), 2);
+
+        let _ = fs::remove_dir_all(temp_dir);
+    }
+
+    #[test]
+    fn framework_mapping_add_and_remove_manage_non_required_mappings() {
+        let unique = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        let temp_dir = std::env::temp_dir().join(format!(
+            "agent-linker-framework-mapping-test-{}-{unique}",
+            std::process::id()
+        ));
+        fs::create_dir(&temp_dir).unwrap();
+        let resolution = DbPathResolution {
+            path: temp_dir.join("agent-linker.db"),
+            reason: DbPathReason::ExplicitDatabaseEnv,
+        };
+        migrate_database(&resolution).unwrap();
+
+        let mapping = add_mapping(
+            &resolution,
+            AddFrameworkMapping {
+                framework: "claude".to_string(),
+                source_path: PathBuf::from("AGENTS.md"),
+                link_path: PathBuf::from(".claude").join("extra.md"),
+                link_kind: LinkKind::File,
+            },
+        )
+        .unwrap();
+
+        assert!(!mapping.required);
+        assert!(list_all_mappings(&resolution)
+            .unwrap()
+            .iter()
+            .any(|stored| stored.id == mapping.id));
+
+        let removed = remove_mapping(&resolution, "claude", &mapping.link_path).unwrap();
+        assert_eq!(removed.id, mapping.id);
+
+        let required =
+            remove_mapping(&resolution, "claude", &PathBuf::from("CLAUDE.md")).unwrap_err();
+        assert!(required.to_string().contains("required"));
 
         let _ = fs::remove_dir_all(temp_dir);
     }

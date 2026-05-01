@@ -3,6 +3,7 @@
 use std::{
     fmt, fs,
     path::{Component, Path, PathBuf},
+    str::FromStr,
 };
 
 use crate::core::{
@@ -271,9 +272,5 @@ pub fn parse_source_ownership(value: &str) -> Result<SourceOwnership> {
 }
 
 pub fn parse_link_kind(value: &str) -> Result<LinkKind> {
-    match value {
-        "file" => Ok(LinkKind::File),
-        "directory" => Ok(LinkKind::Directory),
-        _ => Err(Error::database(format!("unknown source kind `{value}`"))),
-    }
+    LinkKind::from_str(value).map_err(|_| Error::database(format!("unknown source kind `{value}`")))
 }

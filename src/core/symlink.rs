@@ -4,6 +4,7 @@ use std::{
     collections::BTreeMap,
     error, fmt, fs, io,
     path::{Path, PathBuf},
+    str::FromStr,
 };
 
 #[cfg(windows)]
@@ -28,6 +29,29 @@ impl fmt::Display for LinkKind {
         }
     }
 }
+
+impl FromStr for LinkKind {
+    type Err = ParseLinkKindError;
+
+    fn from_str(value: &str) -> std::result::Result<Self, Self::Err> {
+        match value {
+            "file" => Ok(LinkKind::File),
+            "directory" | "dir" => Ok(LinkKind::Directory),
+            other => Err(ParseLinkKindError(other.to_string())),
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ParseLinkKindError(String);
+
+impl fmt::Display for ParseLinkKindError {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(formatter, "unknown link kind `{}`", self.0)
+    }
+}
+
+impl error::Error for ParseLinkKindError {}
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum SymlinkBackend {

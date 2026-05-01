@@ -178,22 +178,52 @@
 
 目标：统一用户体验，并补齐会修改链接状态命令的安全选项。
 
-- [ ] 审查所有顶层命令是否符合 `dev-docs/modules/06-cli-command-surface.md`。
-- [ ] 为除 MVP 明确例外外的链接状态修改命令补齐 `--dry-run`。
-- [ ] 统一默认、`--quiet`、`--verbose` 输出格式。
-- [ ] 评估 `status --json` 是否引入 `serde_json` 或集中 JSON 输出工具，替代 command 层手写 JSON 拼接；若暂不引入依赖，至少固定 JSON escaping 测试与字段维护规则。
-- [ ] 评估 `aglink link --force` 是否进入正式命令面；若加入，只允许替换错误 symlink，并补齐 WrongSymlinkTarget 的用户提示。
-- [ ] 改善 broken symlink 与 force 相关的用户提示；保持 force 不删除真实文件目录、不把缺失 source 当作可修复成功状态。
-- [ ] 评估 `link` 创建缺失父目录时是否在报告中返回 created dirs，并在默认或 verbose 输出中提示用户。
-- [ ] 评估是否引入 `clap` 或集中参数解析，替代 command 层手写 flag index 解析。
-- [ ] 审查 command 层，确保没有直接 SQL、manifest 读写或平台 symlink API 调用。
-- [ ] 添加架构边界测试或静态检查，防止 `commands` 绕过 core。
-- [ ] 抽取重复小工具：`timestamp()`、`bool_to_i64()`、`LinkKind` 字符串解析，以及测试中的临时目录 helper；优先放入语义明确的 `core::util` / `core::test_support`，不要把非路径工具塞进 `paths.rs`。
-- [ ] 复查 clean 的 missing-source 判定，区分真实 NotFound 与权限等其他 metadata 错误，避免把不可诊断的 IO 错误静默当成 source missing。
-- [ ] 评估 unlink/clean 内部选中记录的索引集合是否改用 `HashSet` / `BTreeSet`，避免 manifest 增大后 `Vec::contains` 形成不必要的 O(n²) 扫描。
-- [ ] 评估 group link 内部是否可避免 `group.items.clone()`，在不牺牲接口清晰度的前提下降低大 group 的额外分配。
-- [ ] 复查 `unlink <name>` 的匹配规则和提示文案，特别是按 link path 文件名匹配的便利行为；保留时应确保歧义提示要求使用 manifest id 或完整 link path。
-- [ ] 补齐 README 或开发说明中的真实构建、测试、运行命令；不要复制过长设计内容到根 `AGENTS.md`。
+阶段 7 实施决策（2026-05-01）：
+
+- 以 `dev-docs/modules/06-cli-command-surface.md` 为命令契约来源；发现实现不一致时优先修实现，不通过收缩文档来迁就当前代码。
+- 引入 `clap` 作为正式参数解析入口，替代 command 层手写 flag index 解析。
+- 引入 `serde_json` 作为 JSON 输出入口，替代 `status --json` 手写 JSON 拼接。
+- 正式引入 `aglink link --force`，语义只允许替换错误 symlink，不允许删除真实文件或真实目录。
+- `--dry-run` 覆盖 `link`、`unlink`、`clean`、`group link`、`group unlink`；`init` 暂作为 MVP 例外，若后续纳入需先更新 CLI 契约文档。
+
+阶段 7 命令契约矩阵（2026-05-01）：
+
+| 命令区域 | 阶段 7 结论 |
+| --- | --- |
+| `config` | 补齐 `path/list/get/set/unset`，存储仍走全局 SQLite。 |
+| `db` | 保留 `path/migrate/check`，补齐 `backup [path]` 且不覆盖已有备份目标。 |
+| `framework` | 保留 list/show/enable/disable/mapping list，补齐 mapping add/remove；required mapping 不允许删除。 |
+| `skill` / `resource` | 改为 path-first add，并保留可选 `--name` / `--alias`；resource add 继续要求 `--target-dir`。 |
+| `link` / `group link` | 增加 `--dry-run`；增加 `--force`，仅替换错误 symlink。 |
+| `unlink` / `group unlink` / `clean` | 增加 `--dry-run`，dry-run 不删除 symlink、不写 manifest。 |
+| `status` / `doctor` | `status --json` 改为结构化 JSON 输出；`doctor --verbose` 通过全局 `--verbose` 支持。 |
+
+- [x] 建立阶段 7 命令契约矩阵，对照 `dev-docs/modules/06-cli-command-surface.md` 列出已实现、需补齐、需改签名的命令。
+- [x] 以 CLI 契约为准补齐缺失命令：`config path/list/get/set/unset`、`db backup [path]`、`framework mapping add/remove`。
+- [x] 将 `skill add` / `resource add` 调整为 path-first：`skill add <path> [--name <name>] [--alias <link-name>]` 与 `resource add <path> --target-dir <dir> [--name <name>] [--alias <link-name>]`。
+- [x] 引入 `clap`，统一顶层命令、子命令、全局 `--quiet` / `--verbose`、命令级 `--dry-run` / `--force` 的解析与 usage。
+- [x] 调整输出架构：CLI 层负责格式化输出，command 层返回结构化 report；避免新增 command 层散落 `println!`。
+- [x] 统一默认、`--quiet`、`--verbose` 输出格式；默认输出摘要，quiet 只输出必要错误，verbose 输出 backend、manifest、created dirs 和诊断细节。
+- [x] 引入 `serde_json`，将 `status --json` 改为结构化序列化，并补齐 JSON 字段稳定性与 escaping 测试。
+- [x] 为 `link`、`unlink`、`clean`、`group link`、`group unlink` 补齐 `--dry-run`，确保 dry-run 不创建 symlink、不删除 symlink、不写 manifest。
+- [x] 正式实现 `aglink link --force`，只传递到 Symlink Core 的 wrong-symlink replacement 路径，并补齐真实文件、真实目录、broken symlink、missing source 的回归测试。
+- [x] 改善 broken symlink 与 force 相关的用户提示；保持 force 不删除真实文件目录、不把缺失 source 当作可修复成功状态。
+- [x] 让 `link` 创建缺失父目录时在 report 中返回 created dirs，并在默认或 verbose 输出中提示用户。
+- [x] 审查 command 层，确保没有直接 SQL、manifest 读写或平台 symlink API 调用。
+- [x] 添加架构边界测试或静态检查，防止 `commands` 绕过 core。
+- [x] 抽取重复小工具：`timestamp()`、`bool_to_i64()`、`LinkKind` 字符串解析，以及测试中的临时目录 helper；优先放入语义明确的 `core::util` / `core::test_support`，不要把非路径工具塞进 `paths.rs`。
+- [x] 复查 clean 的 missing-source 判定，区分真实 NotFound 与权限等其他 metadata 错误，避免把不可诊断的 IO 错误静默当成 source missing。
+- [x] 评估 unlink/clean 内部选中记录的索引集合是否改用 `HashSet` / `BTreeSet`，避免 manifest 增大后 `Vec::contains` 形成不必要的 O(n²) 扫描。
+- [x] 评估 group link 内部是否可避免 `group.items.clone()`，在不牺牲接口清晰度的前提下降低大 group 的额外分配。
+- [x] 复查 `unlink <name>` 的匹配规则和提示文案，特别是按 link path 文件名匹配的便利行为；保留时应确保歧义提示要求使用 manifest id 或完整 link path。
+- [x] 补齐 README 或开发说明中的真实构建、测试、运行命令；不要复制过长设计内容到根 `AGENTS.md`。
+
+阶段 7 验证备注（2026-05-01）：
+
+- 已运行：`cargo fmt`、`cargo fmt --check`、`git diff --check`，均通过。
+- 已运行静态检查：确认 `src/commands` 无 `println!` / `eprintln!`，无 `rusqlite`、manifest 读写函数或平台 symlink API 直接调用；确认未再使用 `group.items.clone()`。
+- 已补充但本会话未能执行的测试覆盖：CLI 参数互斥与 `--dry-run` / `--force` 解析、`status --json` serde escaping、config/db backup、framework mapping add/remove、link dry-run、link force、unlink dry-run、command 层边界静态检查。
+- 未运行：`cargo check --locked`、`cargo test --locked`、`cargo run --locked -- --help`。原因：本工作区 Cargo 验证按 `AGENTS.md` 需要直接提权写入默认 Cargo cache；提权请求被环境用量限制拒绝，且新增 `clap` 依赖需要 Cargo 更新 `Cargo.lock` 后才能使用 `--locked` 验证。
 
 验收：命令表面稳定，架构边界可验证，用户输出可预测。
 

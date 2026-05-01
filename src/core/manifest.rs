@@ -4,7 +4,7 @@ use std::{
     collections::{BTreeMap, BTreeSet},
     fs,
     path::{Path, PathBuf},
-    time::{SystemTime, UNIX_EPOCH},
+    str::FromStr,
 };
 
 use crate::core::{
@@ -14,6 +14,7 @@ use crate::core::{
         default_provider, ensure_symlink, CreateSymlinkOptions, CreateSymlinkOutcome, LinkKind,
         SymlinkBackend, SymlinkProvider,
     },
+    util::timestamp,
 };
 
 const MANIFEST_VERSION: u32 = 1;
@@ -423,13 +424,6 @@ fn record_from_mapping(mapping: &FrameworkMapping, backend: SymlinkBackend) -> L
     }
 }
 
-fn timestamp() -> String {
-    let seconds = SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .map_or(0, |duration| duration.as_secs());
-    format!("unix:{seconds}")
-}
-
 fn serialize_manifest(manifest: &Manifest) -> String {
     let mut output = format!("schema_version = {}\n", manifest.schema_version);
 
@@ -592,11 +586,7 @@ fn required_field(table: &mut BTreeMap<String, String>, key: &str) -> Result<Str
 }
 
 fn parse_link_kind(value: &str) -> Result<LinkKind> {
-    match value {
-        "file" => Ok(LinkKind::File),
-        "directory" => Ok(LinkKind::Directory),
-        other => Err(Error::manifest(format!("unknown link_kind `{other}`"))),
-    }
+    LinkKind::from_str(value).map_err(|_| Error::manifest(format!("unknown link_kind `{value}`")))
 }
 
 fn parse_backend(value: &str) -> Result<SymlinkBackend> {
@@ -682,41 +672,12 @@ mod tests {
     use crate::core::{
         error::Error,
         symlink::{LinkKind, MockEntry, MockSymlinkProvider},
+        test_support::TestDir,
     };
     use std::{
         fs,
         path::{Path, PathBuf},
-        time::{SystemTime, UNIX_EPOCH},
     };
-
-    struct TestDir {
-        path: PathBuf,
-    }
-
-    impl TestDir {
-        fn new() -> Self {
-            let unique = SystemTime::now()
-                .duration_since(UNIX_EPOCH)
-                .unwrap()
-                .as_nanos();
-            let path = std::env::temp_dir().join(format!(
-                "agent-linker-init-test-{}-{unique}",
-                std::process::id()
-            ));
-            fs::create_dir(&path).unwrap();
-            Self { path }
-        }
-
-        fn path(&self) -> &Path {
-            &self.path
-        }
-    }
-
-    impl Drop for TestDir {
-        fn drop(&mut self) {
-            let _ = fs::remove_dir_all(&self.path);
-        }
-    }
 
     fn seeded_provider(project_root: &Path) -> MockSymlinkProvider {
         let mut provider = MockSymlinkProvider::new();
@@ -730,7 +691,7 @@ mod tests {
 
     #[test]
     fn manifest_round_trips_generated_schema() {
-        let temp_dir = TestDir::new();
+        let temp_dir = TestDir::new("manifest");
         let mut provider = seeded_provider(temp_dir.path());
 
         init_project_with_provider(temp_dir.path(), &mut provider).unwrap();
@@ -744,7 +705,7 @@ mod tests {
 
     #[test]
     fn damaged_manifest_fails_without_overwrite() {
-        let temp_dir = TestDir::new();
+        let temp_dir = TestDir::new("manifest");
         fs::create_dir(temp_dir.path().join(".agents")).unwrap();
         let manifest_path = temp_dir.path().join(".agents").join("links.toml");
         fs::write(&manifest_path, "not valid").unwrap();
@@ -758,7 +719,7 @@ mod tests {
 
     #[test]
     fn init_creates_project_files_links_manifest_and_gitignore() {
-        let temp_dir = TestDir::new();
+        let temp_dir = TestDir::new("manifest");
         let mut provider = seeded_provider(temp_dir.path());
 
         let report = init_project_with_provider(temp_dir.path(), &mut provider).unwrap();
@@ -798,7 +759,7 @@ mod tests {
 
     #[test]
     fn repeated_init_is_idempotent_and_preserves_agents_content() {
-        let temp_dir = TestDir::new();
+        let temp_dir = TestDir::new("manifest");
         fs::write(temp_dir.path().join("AGENTS.md"), "user content\n").unwrap();
         fs::write(temp_dir.path().join(".gitignore"), "target/\n").unwrap();
 
@@ -827,7 +788,7 @@ mod tests {
 
     #[test]
     fn init_rejects_real_file_at_claude_link() {
-        let temp_dir = TestDir::new();
+        let temp_dir = TestDir::new("manifest");
         let mut provider = seeded_provider(temp_dir.path());
         provider.add_file(temp_dir.path().join("CLAUDE.md"));
 
@@ -838,7 +799,7 @@ mod tests {
 
     #[test]
     fn init_rejects_real_directory_at_claude_skills_link() {
-        let temp_dir = TestDir::new();
+        let temp_dir = TestDir::new("manifest");
         let mut provider = seeded_provider(temp_dir.path());
         provider.add_dir(temp_dir.path().join(".claude").join("skills"));
 
@@ -849,7 +810,7 @@ mod tests {
 
     #[test]
     fn init_rejects_wrong_symlink_target() {
-        let temp_dir = TestDir::new();
+        let temp_dir = TestDir::new("manifest");
         let mut provider = seeded_provider(temp_dir.path());
         provider.add_file(temp_dir.path().join("OTHER.md"));
         provider.add_symlink(

@@ -5,11 +5,12 @@ use std::{
     path::{Path, PathBuf},
 };
 
-use rusqlite::{params, Connection, OpenFlags};
+use rusqlite::{params, Connection, OpenFlags, OptionalExtension};
 
 use crate::core::{
     error::{Error, Result},
     symlink::LinkKind,
+    util::{bool_to_i64, timestamp, timestamp_nanos},
 };
 
 const DB_FILE_NAME: &str = "agent-linker.db";
@@ -99,6 +100,26 @@ pub struct DbCheckReport {
     pub latest_schema_version: u32,
     pub framework_count: Option<u32>,
     pub mapping_count: Option<u32>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ConfigEntry {
+    pub key: String,
+    pub value: String,
+    pub updated_at: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ConfigUnsetReport {
+    pub key: String,
+    pub removed: bool,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct DbBackupReport {
+    pub source_path: PathBuf,
+    pub backup_path: PathBuf,
+    pub bytes: u64,
 }
 
 impl DbCheckReport {
@@ -209,6 +230,117 @@ pub fn check_database(resolution: &DbPathResolution) -> Result<DbCheckReport> {
         latest_schema_version: LATEST_SCHEMA_VERSION,
         framework_count,
         mapping_count,
+    })
+}
+
+pub fn list_config(resolution: &DbPathResolution) -> Result<Vec<ConfigEntry>> {
+    let connection = open_migrated_connection(resolution)?;
+    let mut statement = connection.prepare(
+        r#"
+        SELECT key, value, updated_at
+        FROM config
+        ORDER BY key
+        "#,
+    )?;
+    let rows = statement.query_map([], |row| {
+        Ok(ConfigEntry {
+            key: row.get(0)?,
+            value: row.get(1)?,
+            updated_at: row.get(2)?,
+        })
+    })?;
+
+    let mut entries = Vec::new();
+    for row in rows {
+        entries.push(row?);
+    }
+    Ok(entries)
+}
+
+pub fn get_config(resolution: &DbPathResolution, key: &str) -> Result<Option<ConfigEntry>> {
+    let connection = open_migrated_connection(resolution)?;
+    connection
+        .query_row(
+            r#"
+            SELECT key, value, updated_at
+            FROM config
+            WHERE key = ?1
+            "#,
+            params![key],
+            |row| {
+                Ok(ConfigEntry {
+                    key: row.get(0)?,
+                    value: row.get(1)?,
+                    updated_at: row.get(2)?,
+                })
+            },
+        )
+        .optional()
+        .map_err(Error::from)
+}
+
+pub fn set_config(resolution: &DbPathResolution, key: &str, value: &str) -> Result<ConfigEntry> {
+    validate_config_key(key)?;
+    let connection = open_migrated_connection(resolution)?;
+    let now = timestamp();
+    connection.execute(
+        r#"
+        INSERT INTO config (key, value, updated_at)
+        VALUES (?1, ?2, ?3)
+        ON CONFLICT(key) DO UPDATE SET
+            value = excluded.value,
+            updated_at = excluded.updated_at
+        "#,
+        params![key, value, now],
+    )?;
+    get_config(resolution, key)?
+        .ok_or_else(|| Error::database(format!("config `{key}` was not stored")))
+}
+
+pub fn unset_config(resolution: &DbPathResolution, key: &str) -> Result<ConfigUnsetReport> {
+    validate_config_key(key)?;
+    let connection = open_migrated_connection(resolution)?;
+    let removed = connection.execute("DELETE FROM config WHERE key = ?1", params![key])? > 0;
+    Ok(ConfigUnsetReport {
+        key: key.to_string(),
+        removed,
+    })
+}
+
+pub fn backup_default_database(destination: Option<&Path>) -> Result<DbBackupReport> {
+    let resolution = resolve_database_path()?;
+    backup_database(&resolution, destination)
+}
+
+pub fn backup_database(
+    resolution: &DbPathResolution,
+    destination: Option<&Path>,
+) -> Result<DbBackupReport> {
+    migrate_database(resolution)?;
+    let backup_path = destination.map_or_else(
+        || default_backup_path(&resolution.path),
+        |path| path.to_path_buf(),
+    );
+
+    if backup_path.exists() {
+        return Err(Error::project(format!(
+            "backup destination already exists: {}",
+            backup_path.display()
+        )));
+    }
+
+    if let Some(parent) = backup_path
+        .parent()
+        .filter(|parent| !parent.as_os_str().is_empty())
+    {
+        fs::create_dir_all(parent)?;
+    }
+
+    let bytes = fs::copy(&resolution.path, &backup_path)?;
+    Ok(DbBackupReport {
+        source_path: resolution.path.clone(),
+        backup_path,
+        bytes,
     })
 }
 
@@ -489,21 +621,16 @@ fn platform_default_path(context: &DbPathContext) -> Result<PathBuf> {
     }
 }
 
-fn bool_to_i64(value: bool) -> i64 {
-    if value {
-        1
-    } else {
-        0
+fn validate_config_key(key: &str) -> Result<()> {
+    if key.trim().is_empty() {
+        return Err(Error::invalid_arguments("config key must not be empty"));
     }
+    Ok(())
 }
 
-fn timestamp() -> String {
-    use std::time::{SystemTime, UNIX_EPOCH};
-
-    let seconds = SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .map_or(0, |duration| duration.as_secs());
-    format!("unix:{seconds}")
+fn default_backup_path(source_path: &Path) -> PathBuf {
+    let parent = source_path.parent().unwrap_or_else(|| Path::new("."));
+    parent.join(format!("agent-linker-backup-{}.db", timestamp_nanos()))
 }
 
 #[cfg(windows)]
@@ -547,44 +674,15 @@ impl From<rusqlite::Error> for Error {
 #[cfg(test)]
 mod tests {
     use super::{
-        check_database, latest_schema_version, migrate_database, resolve_database_path_with,
-        DbPathContext, DbPathReason, DbPathResolution, TargetPlatform,
+        backup_database, check_database, get_config, latest_schema_version, list_config,
+        migrate_database, resolve_database_path_with, set_config, unset_config, DbPathContext,
+        DbPathReason, DbPathResolution, TargetPlatform,
     };
-    use crate::core::framework::{disable_framework, enable_framework, list_frameworks};
-    use std::{
-        fs,
-        path::{Path, PathBuf},
-        time::{SystemTime, UNIX_EPOCH},
+    use crate::core::{
+        framework::{disable_framework, enable_framework, list_frameworks},
+        test_support::TestDir,
     };
-
-    struct TestDir {
-        path: PathBuf,
-    }
-
-    impl TestDir {
-        fn new(label: &str) -> Self {
-            let unique = SystemTime::now()
-                .duration_since(UNIX_EPOCH)
-                .unwrap()
-                .as_nanos();
-            let path = std::env::temp_dir().join(format!(
-                "agent-linker-{label}-{}-{unique}",
-                std::process::id()
-            ));
-            fs::create_dir(&path).unwrap();
-            Self { path }
-        }
-
-        fn path(&self) -> &Path {
-            &self.path
-        }
-    }
-
-    impl Drop for TestDir {
-        fn drop(&mut self) {
-            let _ = fs::remove_dir_all(&self.path);
-        }
-    }
+    use std::{fs, path::Path};
 
     fn base_context(temp_dir: &Path) -> DbPathContext {
         DbPathContext {
@@ -721,5 +819,40 @@ mod tests {
 
         enable_framework(&resolution, "claude").unwrap();
         assert!(list_frameworks(&resolution).unwrap()[0].enabled);
+    }
+
+    #[test]
+    fn config_round_trips_and_database_backup_does_not_overwrite() {
+        let temp_dir = TestDir::new("db-config-backup");
+        let resolution = DbPathResolution {
+            path: temp_dir.path().join("agent-linker.db"),
+            reason: DbPathReason::ExplicitDatabaseEnv,
+        };
+        migrate_database(&resolution).unwrap();
+
+        let entry = set_config(&resolution, "output.mode", "quiet").unwrap();
+        assert_eq!(entry.key, "output.mode");
+        assert_eq!(entry.value, "quiet");
+        assert_eq!(
+            get_config(&resolution, "output.mode")
+                .unwrap()
+                .unwrap()
+                .value,
+            "quiet"
+        );
+        assert_eq!(list_config(&resolution).unwrap().len(), 1);
+
+        let unset = unset_config(&resolution, "output.mode").unwrap();
+        assert!(unset.removed);
+        assert!(get_config(&resolution, "output.mode").unwrap().is_none());
+
+        let backup_path = temp_dir.path().join("backup.db");
+        let backup = backup_database(&resolution, Some(&backup_path)).unwrap();
+        assert_eq!(backup.backup_path, backup_path);
+        assert!(backup.bytes > 0);
+        assert!(backup.backup_path.is_file());
+
+        let overwrite = backup_database(&resolution, Some(&backup.backup_path)).unwrap_err();
+        assert!(overwrite.to_string().contains("already exists"));
     }
 }
