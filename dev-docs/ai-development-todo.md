@@ -134,6 +134,7 @@
 - [ ] 实现 `aglink unlink <name>`、`unlink --all`，只删除 manifest 管理的 symlink。
 - [ ] 用 mock provider、临时 manifest、临时数据库集成测试覆盖 link/status/unlink 核心流程。
 - [ ] 阶段 4/5 完成后复查 `paths.rs` 是否需要承接共享路径工具；只有当 `db`、`manifest`、`linkable` 或 `link/status` 出现实质重复路径解析逻辑时再迁移。
+- [ ] 评估 Registry `link_name` 唯一性策略；若 link/status 需要按 link name 高可靠查询，考虑持久化 `link_name` 并添加唯一约束，避免仅靠全表扫描检测冲突。
 
 验收：链接命令只处理 symlink，不覆盖真实文件目录；manifest 能完整支撑 status 和 unlink。
 
@@ -147,6 +148,7 @@
 - [ ] 实现 group add/remove item，并验证不存在 item、重复 item 和删除 group 不删除 source。
 - [ ] 实现 group link/unlink，内部复用统一 link/unlink 能力。
 - [ ] 实现批量命令时评估 Global Store / Framework Adapter 连接复用；若单个命令会连续执行多个 registry/framework 操作，应避免重复打开连接和重复运行 migration/seed。
+- [ ] 为 Registry / Framework 批量操作设计连接复用 API，避免 group 批量命令为每个 item 重复 open/migrate/seed。
 - [ ] 实现 `clean`、`clean --broken`、`clean --missing-source`，只处理 manifest 管理的 symlink。
 - [ ] 实现 `doctor` 检查数据库、migration、manifest、Framework Adapter、symlink backend 和 Windows Broker 可用性。
 - [ ] 增加 `--verbose` 诊断输出，包含 backend、系统错误码和 Broker 诊断信息。
@@ -163,8 +165,10 @@
 - [ ] 审查所有顶层命令是否符合 `dev-docs/modules/06-cli-command-surface.md`。
 - [ ] 为除 MVP 明确例外外的链接状态修改命令补齐 `--dry-run`。
 - [ ] 统一默认、`--quiet`、`--verbose` 输出格式。
+- [ ] 评估是否引入 `clap` 或集中参数解析，替代 command 层手写 flag index 解析。
 - [ ] 审查 command 层，确保没有直接 SQL、manifest 读写或平台 symlink API 调用。
 - [ ] 添加架构边界测试或静态检查，防止 `commands` 绕过 core。
+- [ ] 抽取重复小工具：`timestamp()`、`bool_to_i64()`、`LinkKind` 字符串解析，以及测试中的临时目录 helper；优先放入语义明确的 `core::util` / `core::test_support`，不要把非路径工具塞进 `paths.rs`。
 - [ ] 补齐 README 或开发说明中的真实构建、测试、运行命令；不要复制过长设计内容到根 `AGENTS.md`。
 
 验收：命令表面稳定，架构边界可验证，用户输出可预测。

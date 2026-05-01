@@ -114,7 +114,7 @@ pub fn refresh_item(
         "#,
         params![
             item.id,
-            source.absolute_path.to_string_lossy().to_string(),
+            path_to_registry_text(&source.absolute_path, "source path")?,
             timestamp()
         ],
     )?;
@@ -158,12 +158,13 @@ fn add_item_with_connection(
             request.item_type.as_str(),
             request.name,
             request.alias,
-            source.absolute_path.to_string_lossy().to_string(),
+            path_to_registry_text(&source.absolute_path, "source path")?,
             source.source_kind.to_string(),
             request
                 .default_target_dir
                 .as_ref()
-                .map(|path| path.to_string_lossy().to_string()),
+                .map(|path| path_to_registry_text(path, "target directory"))
+                .transpose()?,
             request.description,
             now,
             SourceType::LocalPath.as_str(),
@@ -338,6 +339,14 @@ fn link_name_for_request(request: &AddLinkableItem, source_path: &Path) -> Strin
     }
 }
 
+fn path_to_registry_text(path: &Path, label: &str) -> Result<String> {
+    path.to_str().map(str::to_string).ok_or_else(|| {
+        Error::invalid_arguments(format!(
+            "{label} must be valid UTF-8 to store in the global registry"
+        ))
+    })
+}
+
 fn generate_id(item_type: LinkableItemType, name: &str) -> String {
     format!(
         "{}:{}:{}",
@@ -364,6 +373,8 @@ mod tests {
     };
     use crate::core::db::{migrate_database, DbPathReason, DbPathResolution};
     use crate::core::symlink::LinkKind;
+    #[cfg(unix)]
+    use std::{ffi::OsString, os::unix::ffi::OsStringExt};
     use std::{
         fs,
         path::{Path, PathBuf},
@@ -559,6 +570,33 @@ mod tests {
         )
         .unwrap_err();
         assert!(absolute_target.to_string().contains("relative"));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn registry_rejects_non_utf8_source_paths() {
+        let temp_dir = TestDir::new("non-utf8-source");
+        let source = temp_dir.path().join(PathBuf::from(OsString::from_vec(vec![
+            b'n', b'o', b't', 0xff,
+        ])));
+        fs::write(&source, "resource").unwrap();
+        let resolution = resolution(temp_dir.path());
+        migrate_database(&resolution).unwrap();
+
+        let error = add_item(
+            &resolution,
+            AddLinkableItem {
+                item_type: LinkableItemType::Resource,
+                name: "non-utf8".to_string(),
+                alias: None,
+                source_path: source,
+                default_target_dir: Some(PathBuf::from(".agents").join("resources")),
+                description: None,
+            },
+        )
+        .unwrap_err();
+
+        assert!(error.to_string().contains("valid UTF-8"));
     }
 
     #[test]
