@@ -623,7 +623,14 @@ fn require_non_empty(field: &str, value: &str) -> Result<()> {
 }
 
 fn path_to_manifest(path: &Path) -> String {
-    path.to_string_lossy().replace('\\', "/")
+    let path = path.to_string_lossy();
+    // Absolute source paths must round-trip with native separators so Windows
+    // canonical paths continue to match the symlink target reported by the OS.
+    if Path::new(path.as_ref()).is_absolute() {
+        path.to_string()
+    } else {
+        path.replace('\\', "/")
+    }
 }
 
 fn escape_manifest_string(value: &str) -> String {

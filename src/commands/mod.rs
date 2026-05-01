@@ -4,10 +4,15 @@ use crate::core::{
     framework,
     linkable::{LinkableItem, LinkableItemType},
     manifest::{init_current_project, InitProjectReport},
+    project_links::{
+        link_current_project, status_current_project, unlink_current_project, LinkItemReport,
+        LinkItemRequest, StatusReport, UnlinkReport,
+    },
     registry::{self, AddLinkableItem},
+    symlink::{CreateSymlinkOutcome, LinkStatus, RemoveSymlinkOutcome},
 };
 
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Command {
@@ -51,10 +56,223 @@ pub fn run(command: Command) -> Result<()> {
         Command::Framework(args) => run_framework(args),
         Command::Skill(args) => run_linkable(args, LinkableItemType::Skill),
         Command::Resource(args) => run_linkable(args, LinkableItemType::Resource),
+        Command::Link(args) => run_link(args),
+        Command::Unlink(args) => run_unlink(args),
+        Command::Status(args) => run_status(args),
         other => Err(Error::not_implemented(format!(
             "command `{}` is not implemented yet",
             other.name()
         ))),
+    }
+}
+
+fn run_link(args: Vec<String>) -> Result<()> {
+    let request = parse_link_request(&args)?;
+    let report = link_current_project(request)?;
+    print_link_report(&report);
+    Ok(())
+}
+
+fn parse_link_request(args: &[String]) -> Result<LinkItemRequest> {
+    let usage = "usage: aglink link <name> [--as <link-name>] [--target-dir <dir>]";
+    let Some(identifier) = args.first() else {
+        return Err(Error::invalid_arguments(usage));
+    };
+    if identifier.starts_with("--") {
+        return Err(Error::invalid_arguments(usage));
+    }
+
+    let mut link_name_override = None;
+    let mut target_dir_override = None;
+    let mut index = 1;
+
+    while index < args.len() {
+        match args[index].as_str() {
+            "--as" => {
+                index += 1;
+                let Some(value) = args.get(index) else {
+                    return Err(Error::invalid_arguments("--as requires a value"));
+                };
+                link_name_override = Some(value.clone());
+            }
+            "--target-dir" => {
+                index += 1;
+                let Some(value) = args.get(index) else {
+                    return Err(Error::invalid_arguments("--target-dir requires a value"));
+                };
+                target_dir_override = Some(PathBuf::from(value));
+            }
+            other => {
+                return Err(Error::invalid_arguments(format!(
+                    "unknown argument `{other}`; {usage}"
+                )));
+            }
+        }
+        index += 1;
+    }
+
+    Ok(LinkItemRequest {
+        identifier: identifier.clone(),
+        link_name_override,
+        target_dir_override,
+    })
+}
+
+fn print_link_report(report: &LinkItemReport) {
+    let action = match report.outcome {
+        CreateSymlinkOutcome::Created => "Created",
+        CreateSymlinkOutcome::AlreadyCorrect => "Already linked",
+        CreateSymlinkOutcome::ReplacedWrongSymlink => "Updated",
+    };
+    println!(
+        "{action} {} `{}`",
+        report.item_type.as_str(),
+        report.item_name
+    );
+    println!("Link: {}", report.link_path.display());
+    println!("Source: {}", report.source_path.display());
+    println!("Backend: {}", report.provider_backend);
+    println!("Manifest: {}", report.manifest_path.display());
+}
+
+fn run_unlink(args: Vec<String>) -> Result<()> {
+    let identifier = parse_unlink_request(&args)?;
+    let report = unlink_current_project(identifier)?;
+    print_unlink_report(&report);
+    Ok(())
+}
+
+fn parse_unlink_request(args: &[String]) -> Result<Option<String>> {
+    match args {
+        [flag] if flag == "--all" => Ok(None),
+        [identifier] if !identifier.starts_with("--") => Ok(Some(identifier.clone())),
+        [] => Err(Error::invalid_arguments(
+            "usage: aglink unlink <name>|--all",
+        )),
+        _ => Err(Error::invalid_arguments(
+            "usage: aglink unlink <name>|--all",
+        )),
+    }
+}
+
+fn print_unlink_report(report: &UnlinkReport) {
+    println!("Removed managed links: {}", report.outcomes.len());
+    for entry in &report.outcomes {
+        let action = match entry.outcome {
+            RemoveSymlinkOutcome::Removed => "removed",
+            RemoveSymlinkOutcome::Missing => "missing",
+        };
+        println!(
+            "{}\t{}\t{}",
+            action,
+            entry.record.item_name,
+            entry.record.link_path.display()
+        );
+    }
+    println!("Manifest: {}", report.manifest_path.display());
+}
+
+fn run_status(args: Vec<String>) -> Result<()> {
+    let json = match args.as_slice() {
+        [] => false,
+        [flag] if flag == "--json" => true,
+        _ => {
+            return Err(Error::invalid_arguments("usage: aglink status [--json]"));
+        }
+    };
+
+    let report = status_current_project()?;
+    if json {
+        print_status_json(&report);
+    } else {
+        print_status_report(&report);
+    }
+    Ok(())
+}
+
+fn print_status_report(report: &StatusReport) {
+    println!("Project: {}", report.project_root.display());
+    println!("Manifest: {}", report.manifest_path.display());
+    println!("Managed links: {}", report.entries.len());
+    for entry in &report.entries {
+        println!(
+            "{}\t{}\t{}\t{}",
+            status_label(&entry.status),
+            entry.record.item_name,
+            entry.record.link_path.display(),
+            entry.record.source_path.display()
+        );
+    }
+}
+
+fn print_status_json(report: &StatusReport) {
+    println!("{{");
+    println!(
+        "  \"project_root\": \"{}\",",
+        json_escape_path(&report.project_root)
+    );
+    println!(
+        "  \"manifest_path\": \"{}\",",
+        json_escape_path(&report.manifest_path)
+    );
+    println!("  \"links\": [");
+    for (index, entry) in report.entries.iter().enumerate() {
+        let comma = if index + 1 == report.entries.len() {
+            ""
+        } else {
+            ","
+        };
+        println!("    {{");
+        println!("      \"id\": \"{}\",", json_escape(&entry.record.id));
+        println!(
+            "      \"item_id\": \"{}\",",
+            json_escape(&entry.record.item_id)
+        );
+        println!(
+            "      \"item_name\": \"{}\",",
+            json_escape(&entry.record.item_name)
+        );
+        println!(
+            "      \"link_path\": \"{}\",",
+            json_escape_path(&entry.record.link_path)
+        );
+        println!(
+            "      \"source_path\": \"{}\",",
+            json_escape_path(&entry.record.source_path)
+        );
+        println!("      \"link_kind\": \"{}\",", entry.record.link_kind);
+        println!(
+            "      \"provider_backend\": \"{}\",",
+            entry.record.provider_backend
+        );
+        println!("      \"status\": \"{}\"", status_code(&entry.status));
+        println!("    }}{comma}");
+    }
+    println!("  ]");
+    println!("}}");
+}
+
+fn status_label(status: &LinkStatus) -> &'static str {
+    match status {
+        LinkStatus::Missing => "missing",
+        LinkStatus::CorrectSymlink { .. } => "ok",
+        LinkStatus::WrongSymlinkTarget { .. } => "wrong-target",
+        LinkStatus::BrokenSymlink { .. } => "broken",
+        LinkStatus::ExistingRealFile => "real-file",
+        LinkStatus::ExistingRealDirectory => "real-directory",
+        LinkStatus::UnsupportedFileType { .. } => "unsupported",
+    }
+}
+
+fn status_code(status: &LinkStatus) -> &'static str {
+    match status {
+        LinkStatus::Missing => "missing",
+        LinkStatus::CorrectSymlink { .. } => "correct_symlink",
+        LinkStatus::WrongSymlinkTarget { .. } => "wrong_symlink_target",
+        LinkStatus::BrokenSymlink { .. } => "broken_symlink",
+        LinkStatus::ExistingRealFile => "existing_real_file",
+        LinkStatus::ExistingRealDirectory => "existing_real_directory",
+        LinkStatus::UnsupportedFileType { .. } => "unsupported_file_type",
     }
 }
 
@@ -384,4 +602,26 @@ fn yes_no(value: bool) -> &'static str {
     } else {
         "no"
     }
+}
+
+fn json_escape_path(path: &Path) -> String {
+    json_escape(&path.to_string_lossy())
+}
+
+fn json_escape(value: &str) -> String {
+    let mut output = String::new();
+    for character in value.chars() {
+        match character {
+            '\\' => output.push_str("\\\\"),
+            '"' => output.push_str("\\\""),
+            '\n' => output.push_str("\\n"),
+            '\r' => output.push_str("\\r"),
+            '\t' => output.push_str("\\t"),
+            character if character.is_control() => {
+                output.push_str(&format!("\\u{:04x}", character as u32));
+            }
+            character => output.push(character),
+        }
+    }
+    output
 }

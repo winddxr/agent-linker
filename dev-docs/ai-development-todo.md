@@ -125,16 +125,24 @@
 
 目标：把全局 Registry 条目链接到当前项目，并以 manifest 作为项目状态来源。
 
-- [ ] 实现 `aglink link <name>`，根据 Linkable Item 类型计算项目相对 link path。
-- [ ] 实现 `--as <link-name>`，仅覆盖本次链接名，不修改 Registry alias。
-- [ ] 实现 Resource 的 `--target-dir <dir>` 本次覆盖。
-- [ ] 实现链接成功、已存在正确链接、错误 symlink、真实文件和真实目录的用户输出。
-- [ ] 实现 manifest 写入和更新，记录 source、link、kind、provider backend、created/updated 时间。
-- [ ] 实现 `aglink status` 和 `aglink status --json`，状态只来自 manifest 与实际文件系统检查。
-- [ ] 实现 `aglink unlink <name>`、`unlink --all`，只删除 manifest 管理的 symlink。
-- [ ] 用 mock provider、临时 manifest、临时数据库集成测试覆盖 link/status/unlink 核心流程。
-- [ ] 阶段 4/5 完成后复查 `paths.rs` 是否需要承接共享路径工具；只有当 `db`、`manifest`、`linkable` 或 `link/status` 出现实质重复路径解析逻辑时再迁移。
-- [ ] 评估 Registry `link_name` 唯一性策略；若 link/status 需要按 link name 高可靠查询，考虑持久化 `link_name` 并添加唯一约束，避免仅靠全表扫描检测冲突。
+- [x] 实现 `aglink link <name>`，根据 Linkable Item 类型计算项目相对 link path。
+- [x] 实现 `--as <link-name>`，仅覆盖本次链接名，不修改 Registry alias。
+- [x] 实现 Resource 的 `--target-dir <dir>` 本次覆盖。
+- [x] 实现链接成功、已存在正确链接、错误 symlink、真实文件和真实目录的用户输出。
+- [x] 实现 manifest 写入和更新，记录 source、link、kind、provider backend、created/updated 时间。
+- [x] 实现 `aglink status` 和 `aglink status --json`，状态只来自 manifest 与实际文件系统检查。
+- [x] 实现 `aglink unlink <name>`、`unlink --all`，只删除 manifest 管理的 symlink。
+- [x] 用 mock provider、临时 manifest、临时数据库集成测试覆盖 link/status/unlink 核心流程。
+- [x] 阶段 4/5 完成后复查 `paths.rs` 是否需要承接共享路径工具；只有当 `db`、`manifest`、`linkable` 或 `link/status` 出现实质重复路径解析逻辑时再迁移。（2026-05-01 复查：`paths.rs` 仍保持占位；阶段 5 未出现需要迁移的实质重复路径解析逻辑。）
+- [x] 评估 Registry `link_name` 唯一性策略；若 link/status 需要按 link name 高可靠查询，考虑持久化 `link_name` 并添加唯一约束，避免仅靠全表扫描检测冲突。（2026-05-01 评估：MVP 暂保留阶段 4 的按类型扫描校验；阶段 5 通过 manifest link_path 冲突检测保证项目链接状态，不新增 schema migration。）
+
+阶段 5 验证备注（2026-05-01）：
+
+- 已运行：`cargo fmt --check`、`cargo check --locked`、`cargo test --locked`、`cargo run --locked -- --help`、`cargo run --locked -- status --json`。
+- `cargo test --locked` 结果：42 个测试通过，0 个失败。
+- 新增 link/status/unlink 核心流程测试使用 mock symlink provider、临时 manifest 和临时 SQLite 数据库覆盖 Skill 链接、Resource `--as` 与 `--target-dir` 覆盖、status 检查、unlink 移除 manifest 记录，以及真实文件占用 managed path 时拒绝 unlink。
+- 当前仓库只读运行 `aglink status --json` 成功；manifest 中 `CLAUDE.md` 与 `.claude/skills` 两条 init 管理链接均报告 `correct_symlink`。
+- 修正 manifest 路径序列化：Windows 绝对路径保留原始分隔符，项目相对路径继续标准化为 `/`，避免 canonical source path 经 manifest 轮转后与 symlink target 不一致。
 
 验收：链接命令只处理 symlink，不覆盖真实文件目录；manifest 能完整支撑 status 和 unlink。
 
@@ -165,10 +173,14 @@
 - [ ] 审查所有顶层命令是否符合 `dev-docs/modules/06-cli-command-surface.md`。
 - [ ] 为除 MVP 明确例外外的链接状态修改命令补齐 `--dry-run`。
 - [ ] 统一默认、`--quiet`、`--verbose` 输出格式。
+- [ ] 评估 `status --json` 是否引入 `serde_json` 或集中 JSON 输出工具，替代 command 层手写 JSON 拼接；若暂不引入依赖，至少固定 JSON escaping 测试与字段维护规则。
+- [ ] 评估 `aglink link --force` 是否进入正式命令面；若加入，只允许替换错误 symlink，并补齐 WrongSymlinkTarget 的用户提示。
+- [ ] 评估 `link` 创建缺失父目录时是否在报告中返回 created dirs，并在默认或 verbose 输出中提示用户。
 - [ ] 评估是否引入 `clap` 或集中参数解析，替代 command 层手写 flag index 解析。
 - [ ] 审查 command 层，确保没有直接 SQL、manifest 读写或平台 symlink API 调用。
 - [ ] 添加架构边界测试或静态检查，防止 `commands` 绕过 core。
 - [ ] 抽取重复小工具：`timestamp()`、`bool_to_i64()`、`LinkKind` 字符串解析，以及测试中的临时目录 helper；优先放入语义明确的 `core::util` / `core::test_support`，不要把非路径工具塞进 `paths.rs`。
+- [ ] 复查 `unlink <name>` 的匹配规则和提示文案，特别是按 link path 文件名匹配的便利行为；保留时应确保歧义提示要求使用 manifest id 或完整 link path。
 - [ ] 补齐 README 或开发说明中的真实构建、测试、运行命令；不要复制过长设计内容到根 `AGENTS.md`。
 
 验收：命令表面稳定，架构边界可验证，用户输出可预测。
